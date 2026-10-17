@@ -476,12 +476,14 @@ class App:
             self.lbl_detail.configure(
                 text=f"得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　{time.strftime('%H:%M:%S')}")
             self._log(f"命中 门铃  score={ev['score']:.3f}  "
-                      f"调性={ev.get('tonal', 0):.0f}  latency={ev['latency']*1000:.0f}ms")
+                      f"调性={ev.get('tonal', 0):.0f}  调制={ev.get('mod', 0)*100:.0f}%  "
+                      f"latency={ev['latency']*1000:.0f}ms")
             self._flash()
             self.dot.configure(fg=C_CAPTURE)
             self.lbl_state.configure(text="等待声音…")
         else:
-            self._log(f"忽略  score={ev['score']:.3f}  调性={ev.get('tonal', 0):.0f}")
+            self._log(f"忽略  score={ev['score']:.3f}  调性={ev.get('tonal', 0):.0f}  "
+                      f"调制={ev.get('mod', 0)*100:.0f}%")
             self.dot.configure(fg=C_LISTEN)
             self.lbl_state.configure(text="监听中")
             self.lbl_big.configure(text="监听中…", fg=C_LISTEN)

@@ -59,7 +59,11 @@ TEMPLATE_MAX = 1.6        # 模板最多保留多长（取能量最强的一段�
 MAX_CAPTURE = 1.8         # 一段声音最长截取 1.8s（短一点，响应更快）
 COOLDOWN = 3.0            # 两次判定最小间隔
 DEFAULT_THRESHOLD = 0.60  # NCC 阈值（学习后由 config 覆盖）
-TONAL_MIN = 300.0         # 调性门槛：门铃 >1000，噪声/环境响动 <30
+TONAL_MIN = 300.0         # 学习/模板用的调性门槛：门铃 >1000，噪声/环境响动 <30
+TONAL_MIN_HIT = 80.0      # 命中判定用（噪声里的门铃可能只有 ~110）
+TONAL_FAST = 3000.0       # 调性足够高才走“快速命中”，否则进入 0.85s 复核（防大声说话）
+MOD_MAX = 0.55            # 包络调制上限：门铃 0.15~0.30，说话 >0.85
+VERIFY_MIN_DUR = 0.85     # 复核至少需要听这么久才算得准
 
 SOUND_DIR = os.path.join(BASE, "sounds")
 SOUND_FILE = os.path.join(SOUND_DIR, "doorbell_classic.wav")
@@ -174,6 +178,25 @@ def tonal_score(x: np.ndarray) -> float:
     lin = 10 ** (mel / 10)
     med = np.median(lin, axis=1) + 1e-12
     return float(np.mean(np.max(lin, axis=1) / med))
+
+
+def modulation_score(x: np.ndarray) -> float:
+    """包络在 2~8Hz（说话的音节率）的能量占比。
+
+    门铃是“一下响完、平滑衰减”：1 秒窗口里该占比约 15%~30%；
+    说话有连续音节起伏，实测 85% 以上。用它把“大声说话”和门铃分开。
+    窗口太短（<0.7s）时该指标不可信，调用方需保证时长。
+    """
+    db = frame_db(x)
+    if len(db) < 70:                   # 至少 0.7s
+        return 1.0
+    e = db - db.mean()
+    w = np.hanning(len(e))
+    sp = np.abs(np.fft.rfft(e * w)) ** 2
+    f = np.fft.rfftfreq(len(e), HOP / SR)
+    band = sp[(f >= 2.0) & (f <= 8.0)].sum()
+    total = sp[(f >= 0.5) & (f <= 20.0)].sum() + 1e-12
+    return float(band / total)
 
 
 def frame_db(x: np.ndarray, win: int = WIN, hop: int = HOP) -> np.ndarray:
@@ -383,19 +406,39 @@ class Detector:
         self.trace: list[tuple[float, float]] = []   # [(已听时长, 得分), ...]
         self.peak_db = -120.0            # 本次事件到目前为止的最大电平
         self.allow_restart = True        # 采集中遇到明显更响的新起音，允许重开
+        self.pending = False             # 分数够但还需复核（像说话）
+
+    def _judge(self, score: float, dur: float, x: np.ndarray):
+        """返回 (判定, 调性, 调制)。判定: True 命中 / False 忽略 / None 需继续听。"""
+        tonal = tonal_score(x)
+        mod = modulation_score(x) if dur >= VERIFY_MIN_DUR else 1.0
+        if score < self.threshold:
+            return False, tonal, mod
+        if tonal >= TONAL_FAST and score >= self.threshold + 0.10:
+            return True, tonal, mod       # 音高极清晰且分很高：直接命中（快路径）
+        if tonal >= TONAL_MIN_HIT:
+            if dur >= VERIFY_MIN_DUR:    # 听过 0.85s：用包络调制复核
+                return (mod <= MOD_MAX), tonal, mod
+            return None, tonal, mod     # 先挂着，继续听
+        return False, tonal, mod
 
     def _emit(self, score: float, who: str, dur: float, wav: np.ndarray | None = None,
-              tonal: float | None = None) -> dict:
+              hit: bool | None = None, tonal: float | None = None,
+              mod: float | None = None) -> dict:
         if tonal is None:
             tonal = tonal_score(wav) if wav is not None else 0.0
-        is_hit = score >= self.threshold and tonal >= TONAL_MIN
+        if mod is None:
+            mod = modulation_score(wav) if wav is not None else 1.0
+        if hit is None:
+            hit = score >= self.threshold and tonal >= TONAL_MIN_HIT
         ev = {
-            "type": "hit" if is_hit else "ignore",
+            "type": "hit" if hit else "ignore",
             "score": float(score),
             "who": who,
             "dur": dur,
             "latency": time.time() - self.t_onset,
             "tonal": float(tonal),
+            "mod": float(mod),
             "trace": list(self.trace),
             "wav": wav,
         }
@@ -431,6 +474,7 @@ class Detector:
                 self.best_wav, self.best_dur = None, 0.0
                 self.trace = []
                 self.peak_db = db
+                self.pending = False
                 events.append({"type": "trigger", "level": db, "floor": self.floor})
             return events
 
@@ -445,6 +489,7 @@ class Detector:
             self.trace = []
             self.peak_db = db
             self.t_onset = now
+            self.pending = False
             return events
 
         self.peak_db = max(self.peak_db, db)
@@ -460,10 +505,12 @@ class Detector:
             if score > self.best_score:
                 self.best_score, self.best_who = score, who
                 self.best_wav, self.best_dur = x, dur
-            # 够分还不够，还要“像门铃”（有清晰音高），否则继续听完再判
-            if score >= self.threshold and tonal_score(x) >= TONAL_MIN:
-                events.append(self._emit(score, who, dur, x))
+            verdict, tonal, mod = self._judge(score, dur, x)
+            if verdict is True:
+                events.append(self._emit(score, who, dur, x, hit=True, tonal=tonal, mod=mod))
                 return events
+            if verdict is None:
+                self.pending = True         # 像门铃但还不够确认，继续听完再判
 
         if self.cap_quiet >= END_BLOCKS or dur >= MAX_CAPTURE:
             x = np.concatenate(self.buf)
@@ -472,12 +519,15 @@ class Detector:
             if score > self.best_score:
                 self.best_score, self.best_who = score, who
                 self.best_wav, self.best_dur = x, dur
-            # 用本次事件内最好的那一次得分，但调性按“整段录音”算：
-            # 半段窗口可能有音高没出来，整段更有代表性，避免莫名漏报。
+            # 用事件内最高得分，但调性和包络调制按“整段录音”算
+            verdict, tonal, mod = self._judge(self.best_score, dur, x)
+            if verdict is None:             # 录音太短无法复核：只有音高极清晰才放行
+                verdict = tonal >= TONAL_FAST
             if self.best_wav is not None:
                 events.append(self._emit(self.best_score, self.best_who,
                                          self.best_dur, self.best_wav,
-                                         tonal=tonal_score(x)))
+                                         hit=verdict, tonal=tonal, mod=mod))
+            self.pending = False
         return events
 
 
