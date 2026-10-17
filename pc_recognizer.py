@@ -57,13 +57,15 @@ EARLY_HOP = 0.10          # 提前判定：间隔多少秒判一次
 TEMPLATE_MIN = 0.8        # 模板至少保留多长
 TEMPLATE_MAX = 1.6        # 模板最多保留多长（取能量最强的一段）
 MAX_CAPTURE = 1.8         # 一段声音最长截取 1.8s（短一点，响应更快）
-COOLDOWN = 3.0            # 两次判定最小间隔
+COOLDOWN = 8.0            # 两次报警最小间隔（防止同一段持续声音反复报）
 DEFAULT_THRESHOLD = 0.60  # NCC 阈值（学习后由 config 覆盖）
 TONAL_MIN = 300.0         # 学习/模板用的调性门槛：门铃 >1000，噪声/环境响动 <30
 TONAL_MIN_HIT = 80.0      # 命中判定用（噪声里的门铃可能只有 ~110）
 TONAL_FAST = 3000.0       # 快路径：音高要清晰（干净门铃 6000~17000，说话 <1000）
 FAST_MARGIN = 0.20        # 快路径还要求分数比阈值高这么多（干净门铃 0.86+，说话最高 0.51）
-MOD_MAX = 0.55            # 包络调制上限：门铃 0.15~0.30，说话 >0.85
+MOD_MAX = 0.50            # 包络调制上限：门铃 0.15~0.30，说话 >0.85
+DECAY_MAX = -8.0          # 起音后包络下降速度下限（dB/s）：门铃 -24，说话/音乐接近 0
+STAB_MIN = 0.10           # 音高稳定段占比下限：门铃 0.2~0.4，说话 <0.1
 VERIFY_MIN_DUR = 0.85     # 复核至少需要听这么久才算得准
 
 SOUND_DIR = os.path.join(BASE, "sounds")
@@ -200,6 +202,82 @@ def modulation_score(x: np.ndarray) -> float:
     return float(band / total)
 
 
+def decay_slope(x: np.ndarray) -> float:
+    """起音之后包络的下降速度（dB/秒）。门铃衰减明显（负值大），说话接近 0。"""
+    db = frame_db(x)
+    if len(db) < 20:
+        return 0.0
+    k = int(np.argmax(db))
+    tail = db[k:]
+    if len(tail) < 8:
+        return 0.0
+    idx = np.arange(len(tail))
+    slope = np.polyfit(idx, tail, 1)[0]     # dB/帧
+    return float(slope * (SR / HOP))        # → dB/秒
+
+
+def pitch_stability(x: np.ndarray) -> float:
+    """最长“音高稳定段”占整段的比例。
+
+    门铃的“叮”是一个稳定音高，能维持 0.2~0.4 秒；
+    说话的音高一直在滑动（语调），稳定段很短。
+    """
+    spec = frames_fft(x)
+    if spec is None or len(spec) < 8:
+        return 0.0
+    freqs = np.fft.rfftfreq(512, 1 / SR)
+    lo = np.searchsorted(freqs, 300)
+    hi = np.searchsorted(freqs, 4000)
+    band = spec[:, lo:hi]
+    if band.size == 0:
+        return 0.0
+    peak_idx = np.argmax(band, axis=1)
+    peak_val = band[np.arange(len(band)), peak_idx]
+    med = np.median(band, axis=1) + 1e-12
+    prominent = peak_val / med > 3.0
+    pf = freqs[lo + peak_idx]
+    best, run = 0, 1
+    for i in range(1, len(pf)):
+        if prominent[i] and prominent[i - 1] and abs(pf[i] - pf[i - 1]) / (pf[i - 1] + 1e-9) < 0.02:
+            run += 1
+        else:
+            run = 1
+        best = max(best, run)
+    return float(best / len(pf))
+
+
+def frames_fft(x: np.ndarray, win: int = WIN, hop: int = HOP):
+    from numpy.lib.stride_tricks import sliding_window_view
+    if len(x) < win:
+        return None
+    fr = sliding_window_view(x, win)[::hop] * np.hamming(win)
+    return np.abs(np.fft.rfft(fr, n=512))
+
+
+def dominant_freq(x: np.ndarray) -> float:
+    """主频（中频段每帧谱峰的中位数）。
+
+    门铃能量集中在固定音高（实测约 2.4kHz 一带），
+    而说话/音乐的主频通常低得多；用“主频比例”可以做最后一道区分。
+    """
+    spec = frames_fft(x)
+    if spec is None:
+        return 0.0
+    freqs = np.fft.rfftfreq(512, 1 / SR)
+    lo = np.searchsorted(freqs, 300)
+    hi = np.searchsorted(freqs, 4000)
+    band = spec[:, lo:hi]
+    if band.size == 0:
+        return 0.0
+    peak = np.argmax(band, axis=1)
+    val = band[np.arange(len(band)), peak]
+    med = np.median(band, axis=1) + 1e-12
+    ok = val / med > 3.0
+    if not np.any(ok):
+        return 0.0
+    return float(np.median(freqs[lo + peak][ok]))
+
+
 def frame_db(x: np.ndarray, win: int = WIN, hop: int = HOP) -> np.ndarray:
     frames = frame_signal(x, win, hop)
     return 10 * np.log10(np.mean(frames ** 2, axis=1) + 1e-10)
@@ -281,6 +359,7 @@ class Template:
         x = trim_active(to_16k(x, sr), rel_db=15.0, margin=0.08, min_dur=TEMPLATE_MIN)
         x = crop_strongest(x)
         self.tonal = tonal_score(x)          # 模板本身的调性，低于门槛说明不是门铃
+        self.dom = dominant_freq(x)          # 模板主频
         x = stretch_signal(x, stretch)
         self.mat = feat(x)
         self.dur = len(x) / SR
@@ -381,12 +460,16 @@ class Detector:
     """
 
     def __init__(self, templates: list[Template], threshold: float = DEFAULT_THRESHOLD,
-                 gate_db: float = GATE_DB, cooldown: float = COOLDOWN, early: bool = True):
+                 gate_db: float = GATE_DB, cooldown: float = COOLDOWN, early: bool = True,
+                 save_dir: str | None = None):
         self.templates = templates
         self.threshold = threshold
         self.gate_db = gate_db
         self.cooldown = cooldown
         self.early = early
+        self.save_dir = save_dir
+        doms = [t.dom for t in templates if getattr(t, "dom", 0) > 0]
+        self.tpl_dom = float(np.median(doms)) if doms else 0.0
         self.reset()
 
     def reset(self):
@@ -410,37 +493,49 @@ class Detector:
         self.pending = False             # 分数够但还需复核（像说话）
 
     def _judge(self, score: float, dur: float, x: np.ndarray):
-        """返回 (判定, 调性, 调制)。判定: True 命中 / False 忽略 / None 需继续听。"""
+        """返回 (判定, 参数dict)。判定: True 命中 / False 忽略 / None 需继续听。"""
         tonal = tonal_score(x)
         mod = modulation_score(x) if dur >= VERIFY_MIN_DUR else 1.0
-        if score < self.threshold:
-            return False, tonal, mod
+        decay = decay_slope(x)
+        stab = pitch_stability(x)
+        qdom = dominant_freq(x)
+        freq_ratio = (qdom / self.tpl_dom) if (self.tpl_dom > 0 and qdom > 0) else 1.0
+        m = {"tonal": tonal, "mod": mod, "decay": decay, "stab": stab,
+             "freq_ratio": freq_ratio}
+        freq_ok = 0.50 <= freq_ratio <= 2.00
+        if score < self.threshold or not freq_ok:
+            return False, m
         if (dur >= 0.40 and score >= self.threshold + FAST_MARGIN
-                and tonal >= TONAL_FAST):
-            return True, tonal, mod       # 音高极清晰且分很高：直接命中（快路径）
+                and tonal >= TONAL_FAST and stab >= STAB_MIN):
+            return True, m               # 音高清晰 + 分数高 + 音高稳定：快路径
         if tonal >= TONAL_MIN_HIT:
-            if dur >= VERIFY_MIN_DUR:    # 听过 0.85s：用包络调制复核
-                return (mod <= MOD_MAX), tonal, mod
-            return None, tonal, mod     # 先挂着，继续听
-        return False, tonal, mod
+            if dur >= VERIFY_MIN_DUR:
+                ok = (mod <= MOD_MAX and decay <= DECAY_MAX and stab >= STAB_MIN)
+                return ok, m             # 复核：调制低 + 在衰减 + 音高稳定
+            return None, m               # 先挂着，继续听
+        return False, m
 
     def _emit(self, score: float, who: str, dur: float, wav: np.ndarray | None = None,
-              hit: bool | None = None, tonal: float | None = None,
-              mod: float | None = None) -> dict:
-        if tonal is None:
-            tonal = tonal_score(wav) if wav is not None else 0.0
-        if mod is None:
-            mod = modulation_score(wav) if wav is not None else 1.0
+              hit: bool | None = None, metrics: dict | None = None) -> dict:
+        m = dict(metrics or {})
+        if wav is not None:
+            m.setdefault("tonal", tonal_score(wav))
+            m.setdefault("mod", modulation_score(wav))
+            m.setdefault("decay", decay_slope(wav))
+            m.setdefault("stab", pitch_stability(wav))
         if hit is None:
-            hit = score >= self.threshold and tonal >= TONAL_MIN_HIT
+            hit = score >= self.threshold and m.get("tonal", 0) >= TONAL_MIN_HIT
         ev = {
             "type": "hit" if hit else "ignore",
             "score": float(score),
             "who": who,
             "dur": dur,
             "latency": time.time() - self.t_onset,
-            "tonal": float(tonal),
-            "mod": float(mod),
+            "tonal": float(m.get("tonal", 0.0)),
+            "mod": float(m.get("mod", 1.0)),
+            "decay": float(m.get("decay", 0.0)),
+            "stab": float(m.get("stab", 0.0)),
+            "freq_ratio": float(m.get("freq_ratio", 1.0)),
             "trace": list(self.trace),
             "wav": wav,
         }
@@ -448,8 +543,28 @@ class Detector:
             self.last_capture = wav
         if ev["type"] == "hit":
             self.last_hit = time.time()
+        if self.save_dir and wav is not None:
+            self._save_event(ev)
         self.state, self.buf = "idle", []
         return ev
+
+    def _save_event(self, ev: dict):
+        """把判定录音存盘，方便事后分析误报（保留最近 300 个）。"""
+        try:
+            os.makedirs(self.save_dir, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            name = (f"{stamp}_{ev['type']}_s{ev['score']:.2f}_t{ev['tonal']:.0f}"
+                    f"_m{ev['mod']:.2f}_d{ev['decay']:.0f}_st{ev['stab']:.2f}.wav")
+            path = os.path.join(self.save_dir, name)
+            save_wav(path, ev["wav"])
+            old = sorted(glob.glob(os.path.join(self.save_dir, "*.wav")))
+            for p in old[:-300]:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
 
     def process(self, block: np.ndarray) -> list[dict]:
         events: list[dict] = []
@@ -507,28 +622,32 @@ class Detector:
             if score > self.best_score:
                 self.best_score, self.best_who = score, who
                 self.best_wav, self.best_dur = x, dur
-            verdict, tonal, mod = self._judge(score, dur, x)
+            verdict, m = self._judge(score, dur, x)
             if verdict is True:
-                events.append(self._emit(score, who, dur, x, hit=True, tonal=tonal, mod=mod))
+                events.append(self._emit(score, who, dur, x, hit=True, metrics=m))
                 return events
             if verdict is None:
                 self.pending = True         # 像门铃但还不够确认，继续听完再判
 
-        if self.cap_quiet >= END_BLOCKS or dur >= MAX_CAPTURE:
+        # 已经“像门铃但不够确认”时，至少听满复核时长再判，避免半段就下结论
+        end_now = (self.cap_quiet >= END_BLOCKS or dur >= MAX_CAPTURE)
+        if self.pending and dur < VERIFY_MIN_DUR and dur < MAX_CAPTURE:
+            end_now = False
+        if end_now:
             x = np.concatenate(self.buf)
             score, who = analyze(x, self.templates)
             self.trace.append((dur, score))
             if score > self.best_score:
                 self.best_score, self.best_who = score, who
                 self.best_wav, self.best_dur = x, dur
-            # 用事件内最高得分，但调性和包络调制按“整段录音”算
-            verdict, tonal, mod = self._judge(self.best_score, dur, x)
+            # 用事件内最高得分，但其它声学参数按“整段录音”算
+            verdict, m = self._judge(self.best_score, dur, x)
             if verdict is None:             # 录音太短无法复核：只有音高极清晰才放行
-                verdict = tonal >= TONAL_FAST
+                verdict = m.get("tonal", 0) >= TONAL_FAST
             if self.best_wav is not None:
                 events.append(self._emit(self.best_score, self.best_who,
                                          self.best_dur, self.best_wav,
-                                         hit=verdict, tonal=tonal, mod=mod))
+                                         hit=verdict, metrics=m))
             self.pending = False
         return events
 
@@ -1003,7 +1122,8 @@ def cmd_listen(args):
     rec = Recorder(args.device)
     rec.start()
     det = Detector(tpls, threshold=args.threshold, gate_db=args.gate_db,
-                   cooldown=args.cooldown)
+                   cooldown=args.cooldown,
+                   save_dir=os.path.join(SOUND_DIR, "events"))
     try:
         while True:
             block = rec.read_block()

@@ -163,6 +163,8 @@ class App:
                   bg="#e6ebf0", fg=C_TEXT, font=(FONT, 9)).pack(side="left", padx=4)
         tk.Button(row1, text="▶ 播放样本（会出声）", command=self._play_sound, relief="flat",
                   bg="#f0e9dd", fg=C_TEXT, font=(FONT, 9)).pack(side="left", padx=4)
+        tk.Button(row1, text="📂 事件录音", command=self._open_events, relief="flat",
+                  bg="#e6ebf0", fg=C_TEXT, font=(FONT, 9)).pack(side="left", padx=4)
 
         row2 = tk.Frame(self.adv, bg=C_BG)
         row2.pack(fill="x", pady=4)
@@ -382,7 +384,8 @@ class App:
 
     def _listen_worker(self, threshold: float, gate: float, device):
         try:
-            det = R.Detector(self.templates, threshold=threshold, gate_db=gate)
+            det = R.Detector(self.templates, threshold=threshold, gate_db=gate,
+                             save_dir=os.path.join(R.SOUND_DIR, "events"))
             rec = R.Recorder(device)
             rec.start()
             self._post("state", text="监听中", color=C_LISTEN)
@@ -483,6 +486,7 @@ class App:
                 text=f"得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　{self.last_hit_at}")
             self._log(f"命中 门铃  score={ev['score']:.3f}  "
                       f"调性={ev.get('tonal', 0):.0f}  调制={ev.get('mod', 0)*100:.0f}%  "
+                      f"衰减={ev.get('decay', 0):.0f}dB/s  音高稳定={ev.get('stab', 0)*100:.0f}%  "
                       f"latency={ev['latency']*1000:.0f}ms")
             self._flash()
             self.dot.configure(fg=C_CAPTURE)
@@ -493,7 +497,8 @@ class App:
             self._hit_reset_job = self.root.after(3500, self._reset_hit_display)
         else:
             self._log(f"忽略  score={ev['score']:.3f}  调性={ev.get('tonal', 0):.0f}  "
-                      f"调制={ev.get('mod', 0)*100:.0f}%")
+                      f"调制={ev.get('mod', 0)*100:.0f}%  衰减={ev.get('decay', 0):.0f}dB/s  "
+                      f"音高稳定={ev.get('stab', 0)*100:.0f}%")
             self.dot.configure(fg=C_LISTEN)
             self.lbl_state.configure(text="监听中")
             self.lbl_big.configure(text="监听中…", fg=C_LISTEN)
@@ -527,6 +532,14 @@ class App:
         self._flash_job = self.root.after(500, lambda: self.root.configure(bg=C_BG))
 
     # ============================================================ 其他
+    def _open_events(self):
+        p = os.path.join(R.SOUND_DIR, "events")
+        os.makedirs(p, exist_ok=True)
+        try:
+            os.startfile(p)   # noqa: S606  Windows 专用
+        except Exception as e:  # noqa: BLE001
+            self._log(f"打不开文件夹：{e}")
+
     def _play_sound(self):
         def run():
             try:
@@ -562,3 +575,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

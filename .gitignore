@@ -10,3 +10,4 @@ sounds/learned_*.wav
 sounds/room_ref*.wav
 sounds/config.json
 sounds/session_log.csv
+sounds/events/
