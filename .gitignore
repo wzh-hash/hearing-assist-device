@@ -1,0 +1,12 @@
+# ???? _install_deps.py ???
+lib/
+
+# ?????
+__pycache__/
+*.py[cod]
+.tmp/
+*.log
+sounds/learned_*.wav
+sounds/room_ref*.wav
+sounds/config.json
+sounds/session_log.csv
