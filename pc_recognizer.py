@@ -292,6 +292,25 @@ def build_templates(patterns: list[str], augment: bool = True) -> list[Template]
     return tpls
 
 
+def threshold_from_templates(templates: list[Template]) -> float | None:
+    """用模板之间的一致性推算阈值。
+
+    同一门铃的不同录音应该互相高分；如果只有 0.6，阈值就不该设成 0.62，
+    否则现场永远差一点。这里取“最低一致性 − 0.12”，并限幅在 0.50~0.62。
+    """
+    base: dict[str, Template] = {}
+    for t in templates:
+        base.setdefault(os.path.basename(t.path), t)
+    mats = list(base.values())
+    if len(mats) < 2:
+        return None
+    sims = [mats[i].score(mats[j].mat) for i in range(len(mats))
+            for j in range(len(mats)) if i != j]
+    if not sims:
+        return None
+    return float(np.clip(min(sims) - 0.12, 0.50, 0.62))
+
+
 def template_scores(x: np.ndarray, templates: list[Template]) -> list[tuple[str, float]]:
     """返回每个模板的得分（用于演示面板的可视化）。"""
     if len(x) < int(0.25 * SR):
@@ -364,8 +383,10 @@ class Detector:
         self.peak_db = -120.0            # 本次事件到目前为止的最大电平
         self.allow_restart = True        # 采集中遇到明显更响的新起音，允许重开
 
-    def _emit(self, score: float, who: str, dur: float, wav: np.ndarray | None = None) -> dict:
-        tonal = tonal_score(wav) if wav is not None else 0.0
+    def _emit(self, score: float, who: str, dur: float, wav: np.ndarray | None = None,
+              tonal: float | None = None) -> dict:
+        if tonal is None:
+            tonal = tonal_score(wav) if wav is not None else 0.0
         is_hit = score >= self.threshold and tonal >= TONAL_MIN
         ev = {
             "type": "hit" if is_hit else "ignore",
@@ -450,10 +471,12 @@ class Detector:
             if score > self.best_score:
                 self.best_score, self.best_who = score, who
                 self.best_wav, self.best_dur = x, dur
-            # 用本次事件内最好的那一次判定，减少“恰好这一版不好就漏报”
+            # 用本次事件内最好的那一次得分，但调性按“整段录音”算：
+            # 半段窗口可能有音高没出来，整段更有代表性，避免莫名漏报。
             if self.best_wav is not None:
                 events.append(self._emit(self.best_score, self.best_who,
-                                         self.best_dur, self.best_wav))
+                                         self.best_dur, self.best_wav,
+                                         tonal=tonal_score(x)))
         return events
 
 
@@ -659,11 +682,11 @@ def learn_doorbell(device: int | None = None, takes: int = LEARN_TAKES,
         consistency = min(vals)
     report("verified", worst=consistency, pairs=pair_table)
 
-    # 阈值固定在安全区间；一致性高时稍微收紧，避免误报
-    if len(saved) >= 2 and consistency >= 0.55:
-        threshold = 0.62
+    # 阈值按“模板一致性”定：一致性高就收紧，低就放宽，避免永远差一点
+    if len(saved) >= 2:
+        threshold = float(np.clip(consistency - 0.12, 0.50, 0.62))
     else:
-        threshold = 0.60
+        threshold = 0.55
 
     # 替换旧的模板
     for old in glob.glob(os.path.join(SOUND_DIR, "learned_*.wav")):
@@ -900,6 +923,11 @@ def cmd_calibrate(args):
 
 def cmd_listen(args):
     tpls = build_templates(args.ref)
+    if not args.no_auto_threshold:
+        sugg = threshold_from_templates(tpls)
+        if sugg is not None and args.threshold > sugg:
+            print(f"按模板一致性把阈值从 {args.threshold:.2f} 自动下调到 {sugg:.2f}")
+            args.threshold = sugg
     quiet = args.quiet
     logf = None
     if args.log:
@@ -1035,6 +1063,8 @@ def main():
     ap.add_argument("--cal-bell", type=float, default=8.0, help="calibrate：等待播放门铃的秒数")
     ap.add_argument("--with-clean", action="store_true",
                     help="把 sounds 里的干净门铃音频也加入模板")
+    ap.add_argument("--no-auto-threshold", action="store_true",
+                    help="不按模板一致性自动下调阈值")
     args = ap.parse_args()
     if args.ref is None:
         refs = learned_refs()
@@ -1043,6 +1073,7 @@ def main():
         args.ref = list(args.ref) + [SOUND_FILE]
     if args.threshold is None:
         args.threshold = float(load_config().get("threshold", DEFAULT_THRESHOLD))
+    # 显式指定阈值时同样允许自动下调（除非加了 --no-auto-threshold）
 
     {"devices": cmd_devices, "learn": cmd_learn, "selftest": cmd_selftest,
      "record-ref": cmd_record_ref, "calibrate": cmd_calibrate,

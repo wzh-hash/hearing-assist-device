@@ -346,6 +346,12 @@ class App:
             return
         self.stop_evt.clear()
         threshold = float(self.threshold.get())
+        sugg = R.threshold_from_templates(self.templates)
+        if sugg is not None and threshold > sugg:
+            self._log(f"按模板一致性把阈值从 {threshold:.2f} 自动下调到 {sugg:.2f}")
+            threshold = sugg
+            self.threshold.set(round(sugg, 2))
+            self._update_sliders()
         gate = float(self.gate_db.get())
         device = self._selected_device()
         self.lbl_big.configure(text="监听中…", fg=C_LISTEN)
@@ -469,12 +475,13 @@ class App:
             self.lbl_big.configure(text="门铃！", fg=C_HIT)
             self.lbl_detail.configure(
                 text=f"得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　{time.strftime('%H:%M:%S')}")
-            self._log(f"命中 门铃  score={ev['score']:.3f}  latency={ev['latency']*1000:.0f}ms")
+            self._log(f"命中 门铃  score={ev['score']:.3f}  "
+                      f"调性={ev.get('tonal', 0):.0f}  latency={ev['latency']*1000:.0f}ms")
             self._flash()
             self.dot.configure(fg=C_CAPTURE)
             self.lbl_state.configure(text="等待声音…")
         else:
-            self._log(f"忽略  score={ev['score']:.3f}")
+            self._log(f"忽略  score={ev['score']:.3f}  调性={ev.get('tonal', 0):.0f}")
             self.dot.configure(fg=C_LISTEN)
             self.lbl_state.configure(text="监听中")
             self.lbl_big.configure(text="监听中…", fg=C_LISTEN)
