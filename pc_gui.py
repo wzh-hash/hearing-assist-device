@@ -486,7 +486,8 @@ class App:
                 text=f"得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　{self.last_hit_at}")
             self._log(f"命中 门铃  score={ev['score']:.3f}  "
                       f"调性={ev.get('tonal', 0):.0f}  调制={ev.get('mod', 0)*100:.0f}%  "
-                      f"衰减={ev.get('decay', 0):.0f}dB/s  音高稳定={ev.get('stab', 0)*100:.0f}%  "
+                      f"衰减={ev.get('decay', 0):.0f}dB/s  稳定={ev.get('stab', 0)*100:.0f}%  "
+                      f"主频比={ev.get('freq_ratio', 1.0):.2f}  "
                       f"latency={ev['latency']*1000:.0f}ms")
             self._flash()
             self.dot.configure(fg=C_CAPTURE)
@@ -498,7 +499,7 @@ class App:
         else:
             self._log(f"忽略  score={ev['score']:.3f}  调性={ev.get('tonal', 0):.0f}  "
                       f"调制={ev.get('mod', 0)*100:.0f}%  衰减={ev.get('decay', 0):.0f}dB/s  "
-                      f"音高稳定={ev.get('stab', 0)*100:.0f}%")
+                      f"稳定={ev.get('stab', 0)*100:.0f}%  主频比={ev.get('freq_ratio', 1.0):.2f}")
             self.dot.configure(fg=C_LISTEN)
             self.lbl_state.configure(text="监听中")
             self.lbl_big.configure(text="监听中…", fg=C_LISTEN)
