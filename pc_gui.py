@@ -439,7 +439,7 @@ class App:
                     self._stop_listen()
         except queue.Empty:
             pass
-        self.root.after(60, self._poll)
+        self.root.after(25, self._poll)
 
     def _on_event(self, ev: dict):
         if ev["type"] == "trigger":

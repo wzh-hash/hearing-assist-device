@@ -41,6 +41,7 @@ if os.path.isdir(LIB) and LIB not in sys.path:   # 免 pip 安装的依赖目录
 
 # ----------------------------- 参数 -----------------------------
 SR = 16000                # 统一采样率
+BLOCK_SEC = 0.05          # 处理块长度（50ms，响应更快）
 N_FFT = 512
 HOP = 160                 # 10ms
 WIN = 400                 # 25ms
@@ -50,9 +51,9 @@ FMIN, FMAX = 60, 7000
 
 GATE_DB = 8.0             # 门控：比自适应底噪高 8dB 认为“有事件”（噪声环境也能触发）
 END_DB = 5.0              # 连续 END_BLOCKS 块低于 底噪+5dB 判定声音结束
-END_BLOCKS = 2
-EARLY_MIN = 0.5           # 提前判定：听到多少秒后开始“边听边判”
-EARLY_HOP = 0.15          # 提前判定：间隔多少秒判一次
+END_BLOCKS = 3
+EARLY_MIN = 0.35          # 提前判定：听到多少秒后开始“边听边判”（实测 0.35s 就够）
+EARLY_HOP = 0.10          # 提前判定：间隔多少秒判一次
 TEMPLATE_MIN = 0.8        # 模板至少保留多长
 TEMPLATE_MAX = 1.6        # 模板最多保留多长（取能量最强的一段）
 MAX_CAPTURE = 1.8         # 一段声音最长截取 1.8s（短一点，响应更快）
@@ -436,7 +437,7 @@ class Detector:
         # --- capture ---
         # 如果采集中突然出现一个明显更响的新起音（例如噪声先触发、随后门铃响起），
         # 丢掉前面的采集，从新起音重新开始，避免真正的门铃被“噪声包”淹没。
-        dur_so_far = len(self.buf) * 0.1
+        dur_so_far = len(self.buf) * BLOCK_SEC
         if (self.allow_restart and dur_so_far >= 0.4 and db > self.peak_db + 10.0):
             self.buf, self.cap_quiet = [block], 0
             self.best_score, self.best_who = 0.0, ""
@@ -449,7 +450,7 @@ class Detector:
         self.peak_db = max(self.peak_db, db)
         self.buf.append(block)
         self.cap_quiet = 0 if db >= self.floor + END_DB else self.cap_quiet + 1
-        dur = len(self.buf) * 0.1
+        dur = len(self.buf) * BLOCK_SEC
 
         if self.early and dur >= EARLY_MIN and dur - self.last_try_dur >= EARLY_HOP:
             self.last_try_dur = dur
@@ -495,7 +496,7 @@ class Recorder:
         for fs in (self.fs, 48000, 44100):
             try:
                 self.stream = sd.InputStream(
-                    samplerate=fs, channels=1, blocksize=int(fs * 0.1),
+                    samplerate=fs, channels=1, blocksize=int(fs * BLOCK_SEC),
                     dtype="float32", device=device, callback=self._cb,
                 )
                 self.fs = fs
@@ -540,7 +541,7 @@ LEARN_MAX_DUR = 2.40      # 从触发起固定录这么久，再裁掉尾部余�
 LEARN_MIN_AUDIO = 1.50    # 至少录这么久（避免“叮—咚”中间停顿被当结束）
 LEARN_GATE_DB = 12.0      # 学习时门控（比底噪高 12dB 才算一次声响，减少环境误触发）
 LEARN_PEAK_MIN = -40.0    # 峰值低于这个算“太小声”，要求重录
-LEARN_QUIET_BLOCKS = 4    # 连续 0.4s 静音可以提前结束（但不少于 LEARN_MIN_AUDIO）
+LEARN_QUIET_BLOCKS = 8    # 连续 0.4s 静音可以提前结束（但不少于 LEARN_MIN_AUDIO）
 LEARN_TIMEOUT = 15.0      # 每次等待用户按门铃的最长秒数
 LEARN_TAKES = 2           # 默认学 2 次
 LEARN_MAX_ATTEMPTS = 8    # 最多尝试 8 次，尽量不因为一次录差就失败
@@ -566,7 +567,7 @@ def capture_event(rec: Recorder, gate_db: float = LEARN_GATE_DB,
         if len(level_hist) > 20:
             level_hist.pop(0)
         pre_blocks.append(b)
-        if len(pre_blocks) > 3:                 # 保留 0.3s 预录
+        if len(pre_blocks) > 6:                 # 保留 0.3s 预录（50ms/块）
             pre_blocks.pop(0)
         floor = float(np.median(level_hist)) if len(level_hist) >= 8 else db
         if db < max(floor + gate_db, -70.0):
@@ -579,7 +580,7 @@ def capture_event(rec: Recorder, gate_db: float = LEARN_GATE_DB,
                 continue
             buf.append(bb)
             quiet = 0 if _db(bb) > floor + END_DB else quiet + 1
-            dur = len(buf) * 0.1
+            dur = len(buf) * BLOCK_SEC
             if dur >= max_dur:
                 break
             if quiet >= LEARN_QUIET_BLOCKS and dur >= LEARN_MIN_AUDIO:
