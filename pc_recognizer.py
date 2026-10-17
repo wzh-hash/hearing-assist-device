@@ -61,7 +61,8 @@ COOLDOWN = 3.0            # 两次判定最小间隔
 DEFAULT_THRESHOLD = 0.60  # NCC 阈值（学习后由 config 覆盖）
 TONAL_MIN = 300.0         # 学习/模板用的调性门槛：门铃 >1000，噪声/环境响动 <30
 TONAL_MIN_HIT = 80.0      # 命中判定用（噪声里的门铃可能只有 ~110）
-TONAL_FAST = 3000.0       # 调性足够高才走“快速命中”，否则进入 0.85s 复核（防大声说话）
+TONAL_FAST = 3000.0       # 快路径：音高要清晰（干净门铃 6000~17000，说话 <1000）
+FAST_MARGIN = 0.20        # 快路径还要求分数比阈值高这么多（干净门铃 0.86+，说话最高 0.51）
 MOD_MAX = 0.55            # 包络调制上限：门铃 0.15~0.30，说话 >0.85
 VERIFY_MIN_DUR = 0.85     # 复核至少需要听这么久才算得准
 
@@ -414,7 +415,8 @@ class Detector:
         mod = modulation_score(x) if dur >= VERIFY_MIN_DUR else 1.0
         if score < self.threshold:
             return False, tonal, mod
-        if tonal >= TONAL_FAST and score >= self.threshold + 0.10:
+        if (dur >= 0.40 and score >= self.threshold + FAST_MARGIN
+                and tonal >= TONAL_FAST):
             return True, tonal, mod       # 音高极清晰且分很高：直接命中（快路径）
         if tonal >= TONAL_MIN_HIT:
             if dur >= VERIFY_MIN_DUR:    # 听过 0.85s：用包络调制复核

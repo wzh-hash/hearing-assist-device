@@ -66,6 +66,8 @@ class App:
         self.templates: list = []
         self.devices: list[tuple[int, str]] = []
         self._flash_job = None
+        self._hit_reset_job = None
+        self.last_hit_at = ""
         self._advanced_open = False
         self.panel = None
         self.history: list[dict] = []
@@ -366,6 +368,9 @@ class App:
 
     def _stop_listen(self):
         self.stop_evt.set()
+        if self._hit_reset_job:
+            self.root.after_cancel(self._hit_reset_job)
+            self._hit_reset_job = None
         self.btn_toggle.configure(text="② 开始监听", bg=C_LISTEN, activebackground="#248a4c")
         self.dot.configure(fg=C_STOP)
         self.lbl_state.configure(text="已停止")
@@ -472,21 +477,38 @@ class App:
         self.stats["snrs"].append(entry["snr"])
 
         if ev["type"] == "hit":
+            self.last_hit_at = time.strftime("%H:%M:%S")
             self.lbl_big.configure(text="门铃！", fg=C_HIT)
             self.lbl_detail.configure(
-                text=f"得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　{time.strftime('%H:%M:%S')}")
+                text=f"得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　{self.last_hit_at}")
             self._log(f"命中 门铃  score={ev['score']:.3f}  "
                       f"调性={ev.get('tonal', 0):.0f}  调制={ev.get('mod', 0)*100:.0f}%  "
                       f"latency={ev['latency']*1000:.0f}ms")
             self._flash()
             self.dot.configure(fg=C_CAPTURE)
             self.lbl_state.configure(text="等待声音…")
+            # 3.5 秒后自动复位，避免“门铃不响了界面还显示门铃”
+            if self._hit_reset_job:
+                self.root.after_cancel(self._hit_reset_job)
+            self._hit_reset_job = self.root.after(3500, self._reset_hit_display)
         else:
             self._log(f"忽略  score={ev['score']:.3f}  调性={ev.get('tonal', 0):.0f}  "
                       f"调制={ev.get('mod', 0)*100:.0f}%")
             self.dot.configure(fg=C_LISTEN)
             self.lbl_state.configure(text="监听中")
             self.lbl_big.configure(text="监听中…", fg=C_LISTEN)
+
+    def _reset_hit_display(self):
+        self._hit_reset_job = None
+        running = bool(self.worker and self.worker.is_alive())
+        if running:
+            self.lbl_big.configure(text="监听中…", fg=C_LISTEN)
+            self.lbl_detail.configure(
+                text=f"上一声门铃 {self.last_hit_at}" if self.last_hit_at else "听到门铃会大字提示")
+            self.dot.configure(fg=C_LISTEN)
+            self.lbl_state.configure(text="监听中")
+        else:
+            self.lbl_big.configure(text="已停止", fg="#b6bec7")
 
     def _open_panel(self):
         if pc_dash is None:
