@@ -92,10 +92,11 @@ class DataPanel(tk.Toplevel):
         left.pack(side="left", fill="y", padx=(0, 10))
         tk.Label(left, text="事件列表（点击查看）", bg=BG, fg=SUB,
                  font=("Microsoft YaHei UI", 9)).pack(anchor="w")
-        cols = ("time", "type", "score", "lat", "dur")
+        cols = ("time", "cls", "type", "score", "lat", "dur")
         self.tree = ttk.Treeview(left, columns=cols, show="headings", height=22)
-        for c, t, w in [("time", "时间", 72), ("type", "判定", 60), ("score", "得分", 64),
-                        ("lat", "延迟", 72), ("dur", "时长", 64)]:
+        for c, t, w in [("time", "时间", 66), ("cls", "事件", 64),
+                        ("type", "判定", 52), ("score", "得分", 56),
+                        ("lat", "延迟", 66), ("dur", "时长", 56)]:
             self.tree.heading(c, text=t)
             self.tree.column(c, width=w, anchor="center")
         self.tree.pack(fill="y", expand=True, pady=(4, 0))
@@ -177,7 +178,8 @@ class DataPanel(tk.Toplevel):
         for i, ev in enumerate(self.app.history):
             tag = "hit" if ev["type"] == "hit" else "ig"
             self.tree.insert("", "end", iid=str(i), tags=(tag,), values=(
-                ev["time"], "命中" if ev["type"] == "hit" else "忽略",
+                ev["time"], ev.get("label", "—"),
+                "命中" if ev["type"] == "hit" else "忽略",
                 f"{ev['score']:.2f}", f"{ev['latency_ms']:.0f}ms", f"{ev['dur']:.2f}s"))
         self.tree.tag_configure("hit", foreground=HIT)
         self.tree.tag_configure("ig", foreground=SUB)
@@ -317,11 +319,12 @@ class DataPanel(tk.Toplevel):
         try:
             with open(path, "w", newline="", encoding="utf-8-sig") as f:
                 w = csv.writer(f)
-                w.writerow(["时间", "判定", "得分", "延迟ms", "时长s", "模板", "信噪比dB"])
+                w.writerow(["时间", "事件", "判定", "得分", "延迟ms", "时长s", "模板", "信噪比dB"])
                 for ev in self.app.history:
-                    w.writerow([ev["time"], ev["type"], f"{ev['score']:.4f}",
-                                f"{ev['latency_ms']:.0f}", f"{ev['dur']:.2f}",
-                                ev.get("who", ""), f"{ev.get('snr', 0):.1f}"])
+                    w.writerow([ev["time"], ev.get("label", ""), ev["type"],
+                                f"{ev['score']:.4f}", f"{ev['latency_ms']:.0f}",
+                                f"{ev['dur']:.2f}", ev.get("who", ""),
+                                f"{ev.get('snr', 0):.1f}"])
             self.lbl_tip.configure(text=f"已导出：{path}")
         except OSError as e:
             self.lbl_tip.configure(text=f"导出失败：{e}")

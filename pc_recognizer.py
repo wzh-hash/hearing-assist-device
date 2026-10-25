@@ -56,7 +56,7 @@ EARLY_MIN = 0.35          # 提前判定：听到多少秒后开始“边听边�
 EARLY_HOP = 0.10          # 提前判定：间隔多少秒判一次
 TEMPLATE_MIN = 0.8        # 模板至少保留多长
 TEMPLATE_MAX = 1.6        # 模板最多保留多长（取能量最强的一段）
-MAX_CAPTURE = 1.8         # 一段声音最长截取 1.8s（短一点，响应更快）
+MAX_CAPTURE = 2.6         # 一段声音最长截取 2.6s（火警 T3 要听到 3 个脉冲）
 COOLDOWN = 8.0            # 两次报警最小间隔（防止同一段持续声音反复报）
 DEFAULT_THRESHOLD = 0.60  # NCC 阈值（学习后由 config 覆盖）
 TONAL_MIN = 300.0         # 学习/模板用的调性门槛：门铃 >1000，噪声/环境响动 <30
@@ -355,6 +355,7 @@ class Template:
     def __init__(self, path: str, stretch: float = 1.0):
         self.path = path
         self.stretch = stretch
+        self.cls = class_of_path(path)
         x, sr = load_wav(path)
         x = trim_active(to_16k(x, sr), rel_db=15.0, margin=0.08, min_dur=TEMPLATE_MIN)
         x = crop_strongest(x)
@@ -385,14 +386,15 @@ def build_templates(patterns: list[str], augment: bool = True) -> list[Template]
     tpls: list[Template] = []
     for f in files:
         t0 = Template(f)
-        if t0.tonal < TONAL_MIN:            # 不像门铃（环境响动/语音），跳过
+        cls = getattr(t0, "cls", "doorbell")
+        if cls == "doorbell" and t0.tonal < TONAL_MIN:   # 不像门铃（环境响动/语音），跳过
             continue
         tpls.append(t0)
         if augment:
             tpls.append(Template(f, 0.95))
             tpls.append(Template(f, 1.05))
     if not tpls:
-        raise SystemExit("参考音里没有像门铃的声音（调性太低），请重新学习")
+        raise SystemExit("参考音里没有可用的声音，请重新学习或检查内置模板")
     return tpls
 
 
@@ -404,6 +406,8 @@ def threshold_from_templates(templates: list[Template]) -> float | None:
     """
     base: dict[str, Template] = {}
     for t in templates:
+        if getattr(t, "cls", "doorbell") != "doorbell":
+            continue
         base.setdefault(os.path.basename(t.path), t)
     mats = list(base.values())
     if len(mats) < 2:
@@ -452,25 +456,187 @@ def analyze(x: np.ndarray, templates: list[Template]) -> tuple[float, str]:
     return best, who
 
 
+# ----------------------------- 多类事件：结构特征（无需学习） -----------------------------
+BUILTIN_AUDIO = os.path.join(SOUND_DIR, "builtin_audio")
+BUILTIN_TPL = os.path.join(SOUND_DIR, "builtin_tpl")
+EVENT_CLASSES = {
+    "doorbell": {"label": "门铃", "tier": "L1"},
+    "knock":    {"label": "敲门", "tier": "L1"},
+    "kettle":   {"label": "水壶鸣笛", "tier": "L2"},
+    "fire":     {"label": "火警警报", "tier": "L3"},
+}
+TIER_COLOR = {"L1": "#2f6fb3", "L2": "#e0a300", "L3": "#e8562a"}
+TPL_THRESHOLDS = {"knock": 0.60, "kettle": 0.60, "fire": 0.60}
+
+
+def class_of_path(path: str) -> str:
+    """按文件名前缀判断属于哪一类：doorbell_* / knock_* / kettle_* / fire_*。"""
+    base = os.path.basename(path).lower()
+    for c in EVENT_CLASSES:
+        if base.startswith(c):
+            return c
+    return "doorbell"
+
+
+def _spec_frames(x: np.ndarray, win: int = WIN, hop: int = HOP):
+    n = len(x) - win
+    if n <= 0:
+        return None, None
+    fr = np.lib.stride_tricks.sliding_window_view(x, win)[::hop] * np.hamming(win)
+    spec = np.abs(np.fft.rfft(fr, n=512)) ** 2
+    return spec, np.fft.rfftfreq(512, 1.0 / SR)
+
+
+def _band_energy(spec: np.ndarray, f: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    m = (f >= lo) & (f <= hi)
+    return spec[:, m].sum(axis=1)
+
+
+def _narrow_concentration(spec, f, lo=2000.0, hi=5000.0, half=120.0) -> np.ndarray:
+    """每个 frame 在频带内、主峰 ±half Hz 的能量占比（窄带音调 → 高）。"""
+    m = (f >= lo) & (f <= hi)
+    b = spec[:, m]
+    fm = f[m]
+    if b.size == 0:
+        return np.zeros(spec.shape[0])
+    idx = np.argmax(b, axis=1)
+    centers = fm[idx]
+    sel = np.abs(fm[None, :] - centers[:, None]) <= half
+    return (b * sel).sum(axis=1) / (b.sum(axis=1) + 1e-12)
+
+
+def _runs(mask: np.ndarray, step: float, min_len: float, max_len: float):
+    out, start = [], None
+    for i, v in enumerate(mask):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            out.append((start, i))
+            start = None
+    if start is not None:
+        out.append((start, len(mask)))
+    return [(a, b) for a, b in out if min_len <= (b - a) * step <= max_len]
+
+
+def _count_knocks(low_db: np.ndarray, step: float) -> int:
+    """低频能量上的敲击次数（快速起音的脉冲，间隔 ≥0.12s）。"""
+    if len(low_db) < 16:
+        return 0
+    med = float(np.median(low_db))
+    peaks = [i for i in range(8, len(low_db) - 8)
+             if low_db[i] > med + 10 and low_db[i] >= low_db[i - 8:i + 9].max() - 0.01]
+    clus = []
+    for p in peaks:
+        if not clus or (p - clus[-1]) * step >= 0.12:
+            clus.append(p)
+    return len(clus)
+
+
+def structural_metrics(x: np.ndarray) -> dict:
+    """与“学没学过”无关的声学结构指标。"""
+    spec, f = _spec_frames(x)
+    if spec is None:
+        return {}
+    step = HOP / SR
+    db = 10 * np.log10(spec.sum(axis=1) + 1e-12)
+    low = 10 * np.log10(_band_energy(spec, f, 60, 500) + 1e-12)
+    high = 10 * np.log10(_band_energy(spec, f, 2000, 5000) + 1e-12)
+    conc = _narrow_concentration(spec, f)
+    hi95 = float(np.percentile(high, 95))
+    on = (high > hi95 - 12) & (conc > 0.35)
+    segs = _runs(on, step, 0.12, 10.0)
+    sustain = max([(b - a) * step for a, b in segs], default=0.0)
+    pulses = [s for s in segs if 0.12 <= (s[1] - s[0]) * step <= 1.2]
+    gaps = [round((pulses[i + 1][0] - pulses[i][1]) * step, 2) for i in range(len(pulses) - 1)]
+    lows = 10 * np.log10(_band_energy(spec, f, 60, 500) + 1e-12)
+    lo_th = float(np.percentile(lows, 90)) - 10.0
+    lo_runs, s = [], None
+    for i, v in enumerate(lows > lo_th):
+        if v and s is None:
+            s = i
+        elif not v and s is not None:
+            lo_runs.append((i - s) * step)
+            s = None
+    if s is not None:
+        lo_runs.append((len(lows) - s) * step)
+    lo_runs = [r for r in lo_runs if r >= 0.02]
+    burst_med = float(np.median(lo_runs)) if lo_runs else 1.0
+    lo_band = spec[:, (f >= 60) & (f <= 500)]
+    low_tonal = float(np.mean(np.max(lo_band, axis=1) / (np.median(lo_band, axis=1) + 1e-12)))
+    return {
+        "level_p90": float(np.percentile(db, 90)),
+        "conc": float(np.mean(conc)),
+        "conc_p90": float(np.percentile(conc, 90)),
+        "high_p90": float(np.percentile(high, 90)),
+        "sustain": round(sustain, 2),
+        "n_pulse": len(pulses),
+        "gaps": gaps,
+        "short_gaps": sum(1 for g in gaps if 0.30 <= g <= 0.80),
+        "n_knock": _count_knocks(lows, step),
+        "burst_med": round(burst_med, 3),
+        "low_tonal": low_tonal,
+    }
+
+
+def structural_class(m: dict) -> tuple[str, float]:
+    """纯声学结构判别（不需要学习，跨设备更稳）。
+
+    依据：
+      - 敲门：2 次以上低频敲击、几乎没有高频窄带能量
+      - 水壶：高频窄带持续 ≥0.55s
+      - 火警：T3 脉冲串（≥3 个脉冲、≥2 个 0.3~0.8s 的间隔）
+      - 门铃：短促、窄带集中度高、脉冲/敲击都很少
+    """
+    if not m:
+        return "", 0.0
+    if m["n_pulse"] >= 3 and m["short_gaps"] >= 2:
+        return "fire", min(1.0, m["n_pulse"] / 3.0)
+    if (m["n_pulse"] >= 2 and m["short_gaps"] >= 1 and m["conc_p90"] >= 0.45
+            and m["n_knock"] >= 3):
+        return "fire", min(1.0, m["n_pulse"] / 3.0)
+    if m["sustain"] >= 0.60 and m["conc_p90"] >= 0.65 and m["short_gaps"] < 2:
+        return "kettle", min(1.0, m["sustain"] / 1.2)
+    if (m["n_knock"] >= 3 and m["conc_p90"] < 0.45 and m["sustain"] < 0.25
+            and m.get("burst_med", 1.0) <= 0.12 and m.get("low_tonal", 0) >= 30):
+        return "knock", min(1.0, m["n_knock"] / 4.0)
+    if (m["conc_p90"] >= 0.85 and 0.20 <= m["sustain"] <= 0.60
+            and m["n_pulse"] <= 1 and m["n_knock"] <= 1):
+        return "doorbell", min(1.0, m["conc_p90"])
+    return "", 0.0
+
+
 class Detector:
     """流式检测状态机（CLI 和 GUI 共用）。
 
-    比旧逻辑快的原因：声音进来 EARLY_MIN 秒后，每 EARLY_HOP 秒就“边听边判”，
-    一旦够分立刻命中，不再等整段门铃响完。
+    四类事件：门铃（模板+结构）、敲门、水壶鸣笛、火警警报（结构规则，无需学习）。
     """
 
     def __init__(self, templates: list[Template], threshold: float = DEFAULT_THRESHOLD,
                  gate_db: float = GATE_DB, cooldown: float = COOLDOWN, early: bool = True,
                  save_dir: str | None = None):
         self.templates = templates
+        self.tpl_by_class: dict[str, list[Template]] = {}
+        for t in templates:
+            self.tpl_by_class.setdefault(getattr(t, "cls", "doorbell"), []).append(t)
+        self.door_tpls = self.tpl_by_class.get("doorbell", [])
         self.threshold = threshold
         self.gate_db = gate_db
         self.cooldown = cooldown
         self.early = early
         self.save_dir = save_dir
-        doms = [t.dom for t in templates if getattr(t, "dom", 0) > 0]
+        doms = [t.dom for t in self.door_tpls if getattr(t, "dom", 0) > 0]
         self.tpl_dom = float(np.median(doms)) if doms else 0.0
         self.reset()
+
+    def _template_class(self, x: np.ndarray, dur: float):
+        """按模板给四类分别打分，返回 (最佳类别, 得分, 次高得分)。"""
+        if dur < 0.35 or not self.tpl_by_class:
+            return "", 0.0, 0.0
+        q = feat(x)
+        best = {c: max(t.score(q) for t in ts) for c, ts in self.tpl_by_class.items()}
+        top = max(best, key=best.get)
+        second = max((v for k, v in best.items() if k != top), default=0.0)
+        return top, best[top], second
 
     def reset(self):
         self.noise: list[float] = []
@@ -490,10 +656,10 @@ class Detector:
         self.trace: list[tuple[float, float]] = []   # [(已听时长, 得分), ...]
         self.peak_db = -120.0            # 本次事件到目前为止的最大电平
         self.allow_restart = True        # 采集中遇到明显更响的新起音，允许重开
-        self.pending = False             # 分数够但还需复核（像说话）
+        self.pending_kind = ""           # '' / 'door' / 'event'：还需继续听的原因
 
-    def _judge(self, score: float, dur: float, x: np.ndarray):
-        """返回 (判定, 参数dict)。判定: True 命中 / False 忽略 / None 需继续听。"""
+    def _judge_doorbell(self, score: float, dur: float, x: np.ndarray):
+        """门铃专属判定：返回 (True/False/None, 参数dict)。"""
         tonal = tonal_score(x)
         mod = modulation_score(x) if dur >= VERIFY_MIN_DUR else 1.0
         decay = decay_slope(x)
@@ -501,7 +667,7 @@ class Detector:
         qdom = dominant_freq(x)
         freq_ratio = (qdom / self.tpl_dom) if (self.tpl_dom > 0 and qdom > 0) else 1.0
         m = {"tonal": tonal, "mod": mod, "decay": decay, "stab": stab,
-             "freq_ratio": freq_ratio}
+             "freq_ratio": freq_ratio, "score": score}
         freq_ok = 0.50 <= freq_ratio <= 2.00
         if score < self.threshold or not freq_ok:
             return False, m
@@ -515,37 +681,89 @@ class Detector:
             return None, m               # 先挂着，继续听
         return False, m
 
-    def _emit(self, score: float, who: str, dur: float, wav: np.ndarray | None = None,
-              hit: bool | None = None, metrics: dict | None = None) -> dict:
-        m = dict(metrics or {})
-        if wav is not None:
-            m.setdefault("tonal", tonal_score(wav))
-            m.setdefault("mod", modulation_score(wav))
-            m.setdefault("decay", decay_slope(wav))
-            m.setdefault("stab", pitch_stability(wav))
-        if hit is None:
-            hit = score >= self.threshold and m.get("tonal", 0) >= TONAL_MIN_HIT
+    def _classify(self, x: np.ndarray, dur: float,
+                  score: float | None = None, who: str = "") -> dict:
+        """四类事件分类：模板打分 + 声学结构规则（互为补充）。"""
+        sm = structural_metrics(x)
+        s_cls, s_conf = structural_class(sm)
+        xa = trim_active(x, rel_db=18.0, margin=0.08, min_dur=0.4) if dur >= 0.45 else x
+        t_cls, t_score, t_second = self._template_class(xa, dur)
+        if score is None:
+            score, who = analyze(xa, self.door_tpls or self.templates)
+        verdict, m = self._judge_doorbell(score, dur, x)
+        m.update(sm)
+        m["s_seen"] = s_cls
+        m["t_cls"] = t_cls
+        m["t_score"] = t_score
+        base = {"score": score, "who": who, "metrics": m, "dur": dur}
+
+        # 1) 结构规则命中（火警 > 水壶 > 敲门），不依赖学习
+        if s_cls in ("fire", "kettle", "knock"):
+            return {**base, "state": "hit", "cls": s_cls, "conf": max(s_conf, 0.6)}
+
+        # 2) 模板命中（房间模板，声音一出现就能对上）
+        t_thr = TPL_THRESHOLDS.get(t_cls, self.threshold)
+        if (t_cls and t_cls != "doorbell" and t_score >= t_thr
+                and (t_score - t_second) >= 0.04):
+            return {**base, "state": "hit", "cls": t_cls,
+                    "conf": max(t_score, 0.6), "who": who}
+
+        # 3) 门铃：模板确认
+        if verdict is True:
+            return {**base, "state": "hit", "cls": "doorbell", "conf": max(score, 0.5)}
+
+        # 4) 还需继续听？
+        kind = ""
+        if verdict is None:
+            kind = "door"
+        if s_cls == "doorbell" and dur < VERIFY_MIN_DUR:
+            kind = kind or "door"
+        if dur < MAX_CAPTURE and t_score >= 0.45 and t_cls != "doorbell":
+            kind = "event"
+        if dur < MAX_CAPTURE and m.get("conc_p90", 0) >= 0.45 and (
+                m.get("n_pulse", 0) >= 1 or m.get("sustain", 0) >= 0.25):
+            kind = "event"
+        if dur < 0.8 and m.get("n_knock", 0) >= 1 and m.get("conc_p90", 0) < 0.45:
+            kind = "event"
+        if kind:
+            return {**base, "state": "pending", "kind": kind, "cls": "", "conf": 0.0}
+        return {**base, "state": "none", "cls": "", "conf": 0.0}
+
+    def _emit(self, res: dict, wav: np.ndarray | None = None) -> dict:
+        m = dict(res.get("metrics") or {})
+        cls = res.get("cls") or ""
+        info = EVENT_CLASSES.get(cls, {"label": "未知", "tier": "L1"})
+        hit = res.get("state") == "hit"
         ev = {
             "type": "hit" if hit else "ignore",
-            "score": float(score),
-            "who": who,
-            "dur": dur,
+            "cls": cls,
+            "label": info["label"],
+            "tier": info["tier"],
+            "conf": float(res.get("conf", 0.0)),
+            "score": float(res.get("score", 0.0)),
+            "who": res.get("who", ""),
+            "dur": float(res.get("dur", 0.0)),
             "latency": time.time() - self.t_onset,
             "tonal": float(m.get("tonal", 0.0)),
             "mod": float(m.get("mod", 1.0)),
             "decay": float(m.get("decay", 0.0)),
             "stab": float(m.get("stab", 0.0)),
             "freq_ratio": float(m.get("freq_ratio", 1.0)),
+            "conc_p90": float(m.get("conc_p90", 0.0)),
+            "n_knock": int(m.get("n_knock", 0)),
+            "n_pulse": int(m.get("n_pulse", 0)),
+            "sustain": float(m.get("sustain", 0.0)),
             "trace": list(self.trace),
             "wav": wav,
         }
         if wav is not None:
             self.last_capture = wav
-        if ev["type"] == "hit":
+        if hit:
             self.last_hit = time.time()
         if self.save_dir and wav is not None:
             self._save_event(ev)
         self.state, self.buf = "idle", []
+        self.pending_kind = ""
         return ev
 
     def _save_event(self, ev: dict):
@@ -553,8 +771,8 @@ class Detector:
         try:
             os.makedirs(self.save_dir, exist_ok=True)
             stamp = time.strftime("%Y%m%d_%H%M%S")
-            name = (f"{stamp}_{ev['type']}_s{ev['score']:.2f}_t{ev['tonal']:.0f}"
-                    f"_m{ev['mod']:.2f}_d{ev['decay']:.0f}_st{ev['stab']:.2f}.wav")
+            name = (f"{stamp}_{ev['type']}_{ev.get('cls') or 'none'}"
+                    f"_s{ev['score']:.2f}_c{ev.get('conf', 0):.2f}.wav")
             path = os.path.join(self.save_dir, name)
             save_wav(path, ev["wav"])
             old = sorted(glob.glob(os.path.join(self.save_dir, "*.wav")))
@@ -577,12 +795,11 @@ class Detector:
                 self.noise.append(db)
             if len(self.noise) > 100:
                 self.noise.pop(0)
-            if len(self.noise) < 10:           # 启动后先学约 1 秒底噪，避免一上来就触发
-                self.floor = float(np.mean(self.noise)) if self.noise else -60.0
+            if len(self.noise) < 10:           # 刚开始没历史：先按安静房间算，避免开头声音被当底噪
+                self.floor = -60.0
+            else:
+                self.floor = float(np.percentile(self.noise, 30))
                 self.floor = max(-70.0, min(-25.0, self.floor))
-                return events
-            self.floor = float(np.percentile(self.noise, 30))
-            self.floor = max(-70.0, min(-25.0, self.floor))
             if (db > self.floor + self.gate_db and db > -70
                     and now - self.last_hit > self.cooldown):
                 self.state, self.buf, self.cap_quiet = "capture", [block], 0
@@ -618,37 +835,37 @@ class Detector:
             self.last_try_dur = dur
             x = np.concatenate(self.buf)
             score, who = analyze(x, self.templates)
-            self.trace.append((dur, score))
             if score > self.best_score:
                 self.best_score, self.best_who = score, who
-                self.best_wav, self.best_dur = x, dur
-            verdict, m = self._judge(score, dur, x)
-            if verdict is True:
-                events.append(self._emit(score, who, dur, x, hit=True, metrics=m))
+            res = self._classify(x, dur, self.best_score, self.best_who)
+            self.trace.append((dur, res.get("score", 0.0)))
+            if res["state"] == "hit":
+                events.append(self._emit(res, x))
                 return events
-            if verdict is None:
-                self.pending = True         # 像门铃但还不够确认，继续听完再判
+            if res["state"] == "pending":
+                self.pending_kind = res.get("kind", "")
 
-        # 已经“像门铃但不够确认”时，至少听满复核时长再判，避免半段就下结论
-        end_now = (self.cap_quiet >= END_BLOCKS or dur >= MAX_CAPTURE)
-        if self.pending and dur < VERIFY_MIN_DUR and dur < MAX_CAPTURE:
+        # 结束条件：普通事件听够静音就收；火警/水壶/敲门这类要听满 2.6s
+        if self.pending_kind == "event":
+            end_now = (dur >= MAX_CAPTURE) or (self.cap_quiet * BLOCK_SEC >= 0.80)
+        else:
+            end_now = (self.cap_quiet >= END_BLOCKS) or (dur >= MAX_CAPTURE)
+        if self.pending_kind == "door" and dur < VERIFY_MIN_DUR:
             end_now = False
         if end_now:
             x = np.concatenate(self.buf)
             score, who = analyze(x, self.templates)
-            self.trace.append((dur, score))
             if score > self.best_score:
                 self.best_score, self.best_who = score, who
-                self.best_wav, self.best_dur = x, dur
-            # 用事件内最高得分，但其它声学参数按“整段录音”算
-            verdict, m = self._judge(self.best_score, dur, x)
-            if verdict is None:             # 录音太短无法复核：只有音高极清晰才放行
-                verdict = m.get("tonal", 0) >= TONAL_FAST
-            if self.best_wav is not None:
-                events.append(self._emit(self.best_score, self.best_who,
-                                         self.best_dur, self.best_wav,
-                                         hit=verdict, metrics=m))
-            self.pending = False
+            res = self._classify(x, dur, self.best_score, self.best_who)
+            if (res["state"] == "pending" and res.get("kind") == "event"
+                    and dur < MAX_CAPTURE):
+                self.pending_kind = "event"     # 火警/水壶需要更长的观测窗
+                return events
+            if res["state"] == "pending":
+                res["state"] = "none"
+            events.append(self._emit(res, x))
+            self.pending_kind = ""
         return events
 
 
@@ -883,12 +1100,21 @@ def learn_doorbell(device: int | None = None, takes: int = LEARN_TAKES,
             "threshold": threshold, "warning": warning}
 
 
+def builtin_refs(cls: str = "doorbell") -> list[str]:
+    """内置参考音（开箱即用，不需要学习）。"""
+    files = sorted(glob.glob(os.path.join(BUILTIN_AUDIO, f"{cls}*.wav")))
+    legacy = os.path.join(SOUND_DIR, "doorbell_classic.wav")
+    if cls == "doorbell" and not files and os.path.exists(legacy):
+        files = [legacy]
+    return files
+
+
 def learned_refs() -> list[str]:
-    """当前可用的学习结果（优先 learned_*.wav，退回 room_ref*.wav）。"""
+    """当前可用的参考：用户学习的门铃 + 内置干净门铃（三类事件靠结构规则识别）。"""
     files = sorted(glob.glob(os.path.join(SOUND_DIR, "learned_*.wav")))
-    if files:
-        return files
-    return sorted(glob.glob(os.path.join(SOUND_DIR, "room_ref*.wav")))
+    if not files:
+        files = sorted(glob.glob(os.path.join(SOUND_DIR, "room_ref*.wav")))
+    return files + builtin_refs("doorbell")
 
 
 CONFIG_PATH = os.path.join(SOUND_DIR, "config.json")
@@ -928,43 +1154,78 @@ def cmd_devices(_args):
         pass
 
 
+def _feed_detector(tpls, threshold, wav, pre: float = 1.2, post: float = 1.0,
+                   pre_wav: np.ndarray | None = None) -> list[dict]:
+    """把一段音频塞进 Detector（前面加静音），返回所有命中事件。"""
+    block = int(SR * BLOCK_SEC)
+    parts = [np.zeros(int(pre * SR), dtype=np.float32)]
+    if pre_wav is not None:
+        parts.append(pre_wav.astype(np.float32))
+        parts.append(np.zeros(int(0.3 * SR), dtype=np.float32))
+    parts.append(wav.astype(np.float32))
+    parts.append(np.zeros(int(post * SR), dtype=np.float32))
+    y = np.concatenate(parts)
+    det = Detector(tpls, threshold=threshold, cooldown=0.0)
+    hits: list[dict] = []
+    for i in range(0, len(y) - block + 1, block):
+        for ev in det.process(y[i:i + block]):
+            if ev["type"] == "hit":
+                hits.append(ev)
+    return hits
+
+
 def cmd_selftest(args):
     tpls = build_templates(args.ref)
-    print("参考模板：")
+    print("门铃模板：")
     for t in tpls:
-        print(f"  {os.path.basename(t.path):26s} {t.dur:5.2f}s  {t.mat.shape}")
+        print(f"  {os.path.basename(t.path):28s} {t.dur:5.2f}s  {t.mat.shape}")
 
-    print("\n== 正样本（应命中）==")
-    pos = []
-    for t in tpls:
-        x, sr = load_wav(t.path)
-        s, who = analyze(to_16k(x, sr), tpls)
-        pos.append(s)
-        print(f"  [{'OK ' if s >= args.threshold else 'LOW'}] {os.path.basename(t.path):26s} score={s:.3f}  (best={who})")
+    print("\n== 四类事件（内置音频，应命中且类别正确）==")
+    ok_all = True
+    for cls in ("doorbell", "knock", "kettle", "fire"):
+        refs = builtin_refs(cls)
+        if not refs:
+            print(f"  [跳过] {cls}：缺少内置音频")
+            continue
+        x, sr = load_wav(refs[0])
+        hits = _feed_detector(tpls, args.threshold, to_16k(x, sr))
+        if hits:
+            ev = hits[0]
+            good = ev["cls"] == cls
+            ok_all &= good
+            print(f"  [{'OK ' if good else 'WRONG'}] {EVENT_CLASSES[cls]['label']:6s}"
+                  f"→ {ev['label']:6s} conf={ev['conf']:.2f} 听到 {ev['dur']:.2f}s")
+        else:
+            ok_all = False
+            print(f"  [MISS] {EVENT_CLASSES[cls]['label']:6s} 没有命中")
 
     print("\n== 负样本（不应命中）==")
-    dur = int(SR * 1.6)
-    t = np.arange(dur) / SR
+    n = int(2.6 * SR)
+    t = np.arange(n) / SR
     rng = np.random.default_rng(7)
+    speech = np.zeros(n, dtype=np.float32)
+    for h in range(1, 8):
+        speech += (1.0 / h) * np.sin(2 * np.pi * h * (140 + 60 * np.sin(2 * np.pi * 1.2 * t)) * t)
+    speech *= (0.5 + 0.5 * np.sign(np.sin(2 * np.pi * 3.2 * t)))
+    speech = (speech / (np.max(np.abs(speech)) + 1e-9) * 0.5).astype(np.float32)
     negs = {
-        "白噪声": rng.normal(0, 0.08, dur),
-        "粉红噪声": np.cumsum(rng.normal(0, 0.01, dur)),
-        "1kHz 纯音": 0.25 * np.sin(2 * np.pi * 1000 * t),
-        "双音和弦": 0.2 * np.sin(2 * np.pi * 440 * t) + 0.2 * np.sin(2 * np.pi * 880 * t),
-        "扫频 200-4kHz": 0.3 * np.sin(2 * np.pi * (200 * (20 ** (t / t[-1]))) * t),
-        "脉冲串 4Hz": 0.6 * (np.sin(2 * np.pi * 4 * t) > 0.95),
-        "敲击/响指": np.convolve(rng.normal(0, 1, dur), np.exp(-np.arange(200) / 20.0), mode="same") * 0.3,
-        "低频嗡声 120Hz": 0.3 * np.sin(2 * np.pi * 120 * t),
+        "说话样": speech,
+        "白噪声": rng.normal(0, 0.05, n).astype(np.float32),
+        "音乐样": (0.2 * np.sin(2 * np.pi * 440 * t) + 0.2 * np.sin(2 * np.pi * 554 * t)
+                 + 0.2 * np.sin(2 * np.pi * 659 * t)).astype(np.float32),
+        "1kHz 纯音": (0.25 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32),
     }
-    neg_scores = {}
-    for k, v in negs.items():
-        s, who = analyze(v.astype(np.float32), tpls)
-        neg_scores[k] = s
-        print(f"  [{'!!  ' if s >= args.threshold else 'OK '}] {k:14s} score={s:.3f}  (best={who})")
+    ok_neg = True
+    for name, wav in negs.items():
+        hits = _feed_detector(tpls, args.threshold, wav)
+        if hits:
+            ok_neg = False
+            ev = hits[0]
+            print(f"  [!! 误报] {name:8s} → {ev['label']} conf={ev['conf']:.2f}")
+        else:
+            print(f"  [OK ] {name:8s} 未命中")
 
-    lo, hi = min(pos), max(neg_scores.values())
-    print(f"\n最小正样本 {lo:.3f} | 最大负样本 {hi:.3f} | 间隔 {lo - hi:+.3f}")
-    print(f"结论：阈值 {'可用' if lo - hi > 0.05 else '偏紧'}；当前 {args.threshold:.2f}")
+    print("\n结论：" + ("全部通过 ✅" if ok_all and ok_neg else "有失败项 ❌（看上面标记）"))
 
 
 def cmd_record_ref(args):

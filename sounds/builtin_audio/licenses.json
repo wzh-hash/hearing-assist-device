@@ -1,0 +1,22 @@
+{
+  "knock": {
+    "license": "CC0",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/2/28/Knock_on_door.wav",
+    "duration": 3.71
+  },
+  "kettle": {
+    "license": "CC BY 4.0",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/8/8f/WWS_Whistlingkettle.ogg",
+    "duration": 64.13
+  },
+  "fire": {
+    "license": "Public domain",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/d/db/NFPA_Fire_Alarm.ogg",
+    "duration": 8.0
+  },
+  "doorbell": {
+    "license": "Public domain (Wikimedia Commons)",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/f/f5/Doorbell-classic-dingdong.ogg",
+    "duration": 3.2
+  }
+}

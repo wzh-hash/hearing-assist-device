@@ -68,6 +68,7 @@ class App:
         self._flash_job = None
         self._hit_reset_job = None
         self.last_hit_at = ""
+        self.last_hit_label = ""
         self._advanced_open = False
         self.panel = None
         self.history: list[dict] = []
@@ -77,6 +78,8 @@ class App:
             value=float(R.load_config().get("threshold", R.DEFAULT_THRESHOLD)))
         self.gate_db = tk.DoubleVar(value=R.GATE_DB)
         self.dev_var = tk.StringVar()
+        self.out_var = tk.StringVar()
+        self.out_devices: list[tuple[int, str]] = []
 
         self._build_ui()
         self._load_templates()
@@ -144,6 +147,16 @@ class App:
                                     activebackground="#248a4c", activeforeground="white")
         self.btn_toggle.pack(side="left", fill="x", expand=True)
 
+        # ---- 试听（演示用，四类事件） ----
+        demo = tk.Frame(self.root, bg=C_BG)
+        demo.pack(fill="x", padx=14, pady=(0, 6))
+        tk.Label(demo, text="试听：", bg=C_BG, fg=C_SUB, font=(FONT, 9)).pack(side="left")
+        for cls in ("doorbell", "knock", "kettle", "fire"):
+            info = R.EVENT_CLASSES[cls]
+            tk.Button(demo, text=f"▶ {info['label']}", relief="flat", bg="#f0e9dd", fg=C_TEXT,
+                      font=(FONT, 9),
+                      command=lambda c=cls: self._play_class(c)).pack(side="left", padx=3)
+
         # ---- 高级设置（可折叠） ----
         self.adv_head = tk.Frame(self.root, bg=C_BG)
         self.adv_head.pack(fill="x", **pad)
@@ -165,6 +178,15 @@ class App:
                   bg="#f0e9dd", fg=C_TEXT, font=(FONT, 9)).pack(side="left", padx=4)
         tk.Button(row1, text="📂 事件录音", command=self._open_events, relief="flat",
                   bg="#e6ebf0", fg=C_TEXT, font=(FONT, 9)).pack(side="left", padx=4)
+
+        row_out = tk.Frame(self.adv, bg=C_BG)
+        row_out.pack(fill="x", pady=2)
+        tk.Label(row_out, text="播放设备", bg=C_BG, fg=C_SUB, font=(FONT, 9)).pack(side="left")
+        self.cmb_out = ttk.Combobox(row_out, textvariable=self.out_var, width=40,
+                                    state="readonly")
+        self.cmb_out.pack(side="left", padx=6)
+        tk.Label(row_out, text="（试听/播放用；默认选扬声器，别选耳机）", bg=C_BG, fg=C_SUB,
+                 font=(FONT, 8)).pack(side="left")
 
         row2 = tk.Frame(self.adv, bg=C_BG)
         row2.pack(fill="x", pady=4)
@@ -234,9 +256,10 @@ class App:
                 self.templates = R.build_templates(refs)
             except SystemExit as e:
                 self._log(str(e))
-            kept = len(self.templates) // 3 if self.templates else 0
-            if refs and kept < len(refs):
-                self._log(f"提示：已跳过 {len(refs) - kept} 段不像门铃的参考音（多半是环境响动）")
+            names = sorted({os.path.basename(t.path) for t in self.templates})
+            skipped = len(refs) - len(names)
+            if skipped > 0:
+                self._log(f"提示：已跳过 {skipped} 段不像门铃的参考音（多半是环境响动）")
         names = ", ".join(sorted({os.path.basename(t.path) for t in self.templates}))
         self.footer.configure(text=f"模板（{len(self.templates)}）：{names or '还没学习'}")
         if self.templates:
@@ -252,9 +275,12 @@ class App:
             import sounddevice as sd
 
             self.devices = []
+            self.out_devices = []
             for i, d in enumerate(sd.query_devices()):
                 if d["max_input_channels"] > 0:
                     self.devices.append((i, d["name"]))
+                if d["max_output_channels"] > 0:
+                    self.out_devices.append((i, d["name"]))
             names = [f"[{i}] {n}" for i, n in self.devices]
             self.cmb_dev["values"] = names
             try:
@@ -264,8 +290,30 @@ class App:
             idx = next((k for k, (i, n) in enumerate(self.devices) if n == default), 0)
             if names:
                 self.cmb_dev.current(idx)
+
+            out_names = [f"[{i}] {n}" for i, n in self.out_devices]
+            self.cmb_out["values"] = out_names
+            # 优先选“扬声器”且双声道的设备，48000Hz 优先（听筒/耳机不要选）
+            cands = [(i, n) for i, n in self.out_devices
+                     if ("扬声器" in n or "Speakers" in n)
+                     and sd.query_devices(i)["max_output_channels"] == 2]
+            cands.sort(key=lambda it: -sd.query_devices(it[0])["default_samplerate"])
+            prefer = 0
+            if cands:
+                prefer = next(k for k, (i, n) in enumerate(self.out_devices) if i == cands[0][0])
+            if out_names:
+                self.cmb_out.current(prefer)
         except Exception as e:  # noqa: BLE001
-            self._log(f"枚举麦克风失败：{e}")
+            self._log(f"枚举音频设备失败：{e}")
+
+    def _selected_out(self):
+        txt = self.out_var.get()
+        if not txt:
+            return None
+        try:
+            return int(txt.split("]")[0].strip("["))
+        except Exception:  # noqa: BLE001
+            return None
 
     def _selected_device(self):
         txt = self.dev_var.get()
@@ -480,16 +528,23 @@ class App:
         self.stats["snrs"].append(entry["snr"])
 
         if ev["type"] == "hit":
+            label = ev.get("label", "门铃")
+            tier = ev.get("tier", "L1")
             self.last_hit_at = time.strftime("%H:%M:%S")
-            self.lbl_big.configure(text="门铃！", fg=C_HIT)
+            self.last_hit_label = label
+            self.stats.setdefault("classes", {})
+            self.stats["classes"][label] = self.stats["classes"].get(label, 0) + 1
+            color = R.TIER_COLOR.get(tier, C_HIT)
+            self.lbl_big.configure(text=f"{label}！", fg=color)
             self.lbl_detail.configure(
-                text=f"得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　{self.last_hit_at}")
-            self._log(f"命中 门铃  score={ev['score']:.3f}  "
-                      f"调性={ev.get('tonal', 0):.0f}  调制={ev.get('mod', 0)*100:.0f}%  "
-                      f"衰减={ev.get('decay', 0):.0f}dB/s  稳定={ev.get('stab', 0)*100:.0f}%  "
-                      f"主频比={ev.get('freq_ratio', 1.0):.2f}  "
+                text=f"{tier}　得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　"
+                     f"{self.last_hit_at}")
+            self._log(f"命中 {label}（{tier}） conf={ev.get('conf', 0):.2f} "
+                      f"score={ev['score']:.3f}  "
+                      f"敲击={ev.get('n_knock', 0)} 脉冲={ev.get('n_pulse', 0)} "
+                      f"持续={ev.get('sustain', 0):.2f}s  "
                       f"latency={ev['latency']*1000:.0f}ms")
-            self._flash()
+            self._flash(tier)
             self.dot.configure(fg=C_CAPTURE)
             self.lbl_state.configure(text="等待声音…")
             # 3.5 秒后自动复位，避免“门铃不响了界面还显示门铃”
@@ -510,7 +565,8 @@ class App:
         if running:
             self.lbl_big.configure(text="监听中…", fg=C_LISTEN)
             self.lbl_detail.configure(
-                text=f"上一声门铃 {self.last_hit_at}" if self.last_hit_at else "听到门铃会大字提示")
+                text=f"上一个事件：{self.last_hit_label} {self.last_hit_at}"
+                if self.last_hit_at else "听到门铃/敲门/水壶/火警会大字提示")
             self.dot.configure(fg=C_LISTEN)
             self.lbl_state.configure(text="监听中")
         else:
@@ -526,11 +582,26 @@ class App:
         self.panel = pc_dash.DataPanel(self.root, self)
         self._log("已打开演示数据面板")
 
-    def _flash(self):
-        self.root.configure(bg="#ffe3d6")
+    def _flash(self, tier: str = "L1"):
+        bg = {"L3": "#ffc9b8", "L2": "#ffe9c4"}.get(tier, "#ffe3d6")
+        self.root.configure(bg=bg)
         if self._flash_job:
             self.root.after_cancel(self._flash_job)
         self._flash_job = self.root.after(500, lambda: self.root.configure(bg=C_BG))
+
+    def _play_class(self, cls: str):
+        def run():
+            try:
+                import sounddevice as sd
+
+                path = os.path.join(R.BUILTIN_AUDIO, f"{cls}.wav")
+                x, sr = R.load_wav(path)
+                self._post("log", text=f"播放 {R.EVENT_CLASSES[cls]['label']} 样本…")
+                sd.play(x, sr)
+                sd.wait()
+            except Exception as e:  # noqa: BLE001
+                self._post("log", text=f"播放失败：{e}")
+        threading.Thread(target=run, daemon=True).start()
 
     # ============================================================ 其他
     def _open_events(self):
@@ -541,15 +612,32 @@ class App:
         except Exception as e:  # noqa: BLE001
             self._log(f"打不开文件夹：{e}")
 
+    def _play_wav(self, path: str, gain: float = 0.35):
+        import sounddevice as sd
+
+        idx = self._selected_out()
+        x, sr = R.load_wav(path)
+        info = sd.query_devices(idx, "output") if idx is not None else sd.query_devices(kind="output")
+        out_sr = int(info["default_samplerate"] or 48000)
+        n = int(len(x) * out_sr / sr)
+        y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
+        sd.play(np.clip(y * gain, -1, 1), out_sr, device=idx)
+        sd.wait()
+
+    def _play_class(self, cls: str):
+        def run():
+            try:
+                self._post("log", text=f"播放 {R.EVENT_CLASSES[cls]['label']} 样本…")
+                self._play_wav(os.path.join(R.BUILTIN_AUDIO, f"{cls}.wav"))
+            except Exception as e:  # noqa: BLE001
+                self._post("log", text=f"播放失败：{e}")
+        threading.Thread(target=run, daemon=True).start()
+
     def _play_sound(self):
         def run():
             try:
-                import sounddevice as sd
-
-                x, sr = R.load_wav(R.SOUND_FILE)
                 self._post("log", text="播放门铃样本…")
-                sd.play(x, sr)
-                sd.wait()
+                self._play_wav(R.SOUND_FILE)
             except Exception as e:  # noqa: BLE001
                 self._post("log", text=f"播放失败：{e}")
         threading.Thread(target=run, daemon=True).start()
