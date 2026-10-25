@@ -547,6 +547,7 @@ def structural_metrics(x: np.ndarray) -> dict:
     segs = _runs(on, step, 0.12, 10.0)
     sustain = max([(b - a) * step for a, b in segs], default=0.0)
     pulses = [s for s in segs if 0.12 <= (s[1] - s[0]) * step <= 1.2]
+    pulse_durs = [round((b - a) * step, 2) for a, b in pulses]
     gaps = [round((pulses[i + 1][0] - pulses[i][1]) * step, 2) for i in range(len(pulses) - 1)]
     lows = 10 * np.log10(_band_energy(spec, f, 60, 500) + 1e-12)
     lo_th = float(np.percentile(lows, 90)) - 10.0
@@ -563,6 +564,35 @@ def structural_metrics(x: np.ndarray) -> dict:
     burst_med = float(np.median(lo_runs)) if lo_runs else 1.0
     lo_band = spec[:, (f >= 60) & (f <= 500)]
     low_tonal = float(np.mean(np.max(lo_band, axis=1) / (np.median(lo_band, axis=1) + 1e-12)))
+    # 音高稳定度 + 包络调制 + 主频（用于区分水壶/说话/音乐）
+    spec2, f2 = spec, f
+    mid = (f2 >= 300) & (f2 <= 4000)
+    band_mid = spec2[:, mid]
+    fm = f2[mid]
+    peak_idx = np.argmax(band_mid, axis=1)
+    peak_val = band_mid[np.arange(len(band_mid)), peak_idx]
+    medv = np.median(band_mid, axis=1) + 1e-12
+    prominent = peak_val / medv > 2.5
+    pf = fm[peak_idx]
+    best_run, run = 0, 1
+    for i in range(1, len(pf)):
+        if prominent[i] and prominent[i - 1] and abs(pf[i] - pf[i - 1]) / (pf[i - 1] + 1e-9) < 0.02:
+            run += 1
+        else:
+            run = 1
+        best_run = max(best_run, run)
+    stab = best_run / max(1, len(pf))
+    dom = float(np.median(pf[prominent])) if np.any(prominent) else 0.0
+    env = db
+    if len(env) >= 70:
+        e = env - env.mean()
+        w = np.hanning(len(e))
+        sp = np.abs(np.fft.rfft(e * w)) ** 2
+        fr = np.fft.rfftfreq(len(e), HOP / SR)
+        mod = float(sp[(fr >= 2.0) & (fr <= 8.0)].sum()
+                    / (sp[(fr >= 0.5) & (fr <= 20.0)].sum() + 1e-12))
+    else:
+        mod = 1.0
     return {
         "level_p90": float(np.percentile(db, 90)),
         "conc": float(np.mean(conc)),
@@ -570,11 +600,15 @@ def structural_metrics(x: np.ndarray) -> dict:
         "high_p90": float(np.percentile(high, 90)),
         "sustain": round(sustain, 2),
         "n_pulse": len(pulses),
+        "pulse_durs": pulse_durs,
         "gaps": gaps,
         "short_gaps": sum(1 for g in gaps if 0.30 <= g <= 0.80),
         "n_knock": _count_knocks(lows, step),
         "burst_med": round(burst_med, 3),
         "low_tonal": low_tonal,
+        "dom": dom,
+        "stab": stab,
+        "mod": mod,
     }
 
 
@@ -589,6 +623,7 @@ def structural_class(m: dict) -> tuple[str, float]:
     """
     if not m:
         return "", 0.0
+    # 火警 T3：3 个以上脉冲 + 2 个以上规则间隔
     if m["n_pulse"] >= 3 and m["short_gaps"] >= 2 and m["conc_p90"] >= 0.55:
         return "fire", min(1.0, m["n_pulse"] / 3.0)
     if (m["n_pulse"] >= 2 and m["short_gaps"] >= 1 and m["conc_p90"] >= 0.62
