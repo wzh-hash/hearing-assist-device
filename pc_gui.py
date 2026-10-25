@@ -449,6 +449,13 @@ class App:
         """演示回放：把内置音频按实时节奏送进检测器（不经麦克风，保证演示可见）。"""
         cls, x = demo
         det.reset()
+        det.strict = False          # 演示回放用干净音频，走非严格管线
+        try:
+            self._feed_demo(det, x)
+        finally:
+            det.strict = True
+
+    def _feed_demo(self, det, x):
         block = int(R.SR * R.BLOCK_SEC)
         y = np.concatenate([
             np.zeros(int(0.30 * R.SR), dtype=np.float32),
@@ -774,5 +781,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 

@@ -649,7 +649,7 @@ class Detector:
 
     def __init__(self, templates: list[Template], threshold: float = DEFAULT_THRESHOLD,
                  gate_db: float = GATE_DB, cooldown: float = COOLDOWN, early: bool = True,
-                 save_dir: str | None = None):
+                 save_dir: str | None = None, strict: bool = True):
         self.templates = templates
         self.tpl_by_class: dict[str, list[Template]] = {}
         for t in templates:
@@ -660,6 +660,7 @@ class Detector:
         self.cooldown = cooldown
         self.early = early
         self.save_dir = save_dir
+        self.strict = strict
         doms = [t.dom for t in self.door_tpls if getattr(t, "dom", 0) > 0]
         self.tpl_dom = float(np.median(doms)) if doms else 0.0
         self.reset()
@@ -693,6 +694,8 @@ class Detector:
         self.peak_db = -120.0            # 本次事件到目前为止的最大电平
         self.allow_restart = True        # 采集中遇到明显更响的新起音，允许重开
         self.pending_kind = ""           # '' / 'door' / 'event'：还需继续听的原因
+        self._conf_cls = ""              # 严格模式：连续确认的类别
+        self._conf_n = 0
 
     def _judge_doorbell(self, score: float, dur: float, x: np.ndarray):
         """门铃专属判定：返回 (True/False/None, 参数dict)。"""
@@ -733,13 +736,32 @@ class Detector:
         m["t_score"] = t_score
         base = {"score": score, "who": who, "metrics": m, "dur": dur}
 
-        # 1) 结构规则命中（火警 > 水壶 > 敲门），不依赖学习
+        # 1) 结构规则命中（火警 > 水壶 > 敲门）。严格模式下要同时满足：
+        #    模板也判成同一类 + 连续两次确认，避免环境噪声偶发误报。
         if s_cls in ("fire", "kettle", "knock"):
-            return {**base, "state": "hit", "cls": s_cls, "conf": max(s_conf, 0.6)}
+            supported = (t_cls == s_cls and t_score >= 0.85 and dur >= 1.0)
+            if not self.strict:
+                return {**base, "state": "hit", "cls": s_cls, "conf": max(s_conf, 0.6)}
+            if not supported:
+                if dur < MAX_CAPTURE:
+                    return {**base, "state": "pending", "kind": "event",
+                            "cls": "", "conf": 0.0}
+                return {**base, "state": "none", "cls": "", "conf": 0.0}
+            if self._conf_cls == s_cls:
+                self._conf_n += 1
+            else:
+                self._conf_cls, self._conf_n = s_cls, 1
+            if self._conf_n >= 2:
+                return {**base, "state": "hit", "cls": s_cls,
+                        "conf": max(s_conf, 0.6)}
+            if dur < MAX_CAPTURE:
+                return {**base, "state": "pending", "kind": "event",
+                        "cls": "", "conf": 0.0}
+            return {**base, "state": "none", "cls": "", "conf": 0.0}
 
         # 2) 模板命中（仅当该类有自己的模板时；门铃单独处理）
         t_thr = TPL_THRESHOLDS.get(t_cls, self.threshold)
-        if (t_cls and t_cls != "doorbell" and t_score >= t_thr
+        if (not self.strict and t_cls and t_cls != "doorbell" and t_score >= t_thr
                 and (t_score - t_second) >= 0.04):
             return {**base, "state": "hit", "cls": t_cls,
                     "conf": max(t_score, 0.6), "who": who}
@@ -1152,12 +1174,14 @@ def builtin_refs(cls: str = "doorbell") -> list[str]:
 
 
 def learned_refs() -> list[str]:
-    """当前可用的参考：现场校准模板（最优先）+ 用户学习结果 + 内置门铃。"""
+    """当前可用参考：校准模板 + 学习结果 + 四类内置干净模板（门铃开箱即用）。"""
     files = sorted(glob.glob(os.path.join(CALIB_TPL, "*.wav")))
     files += sorted(glob.glob(os.path.join(SOUND_DIR, "learned_*.wav")))
     if not files:
         files += sorted(glob.glob(os.path.join(SOUND_DIR, "room_ref*.wav")))
-    return files + builtin_refs("doorbell")
+    for cls in EVENT_CLASSES:
+        files += builtin_refs(cls)
+    return files
 
 
 def extract_calib_segment(rec: np.ndarray, pre_sec: float = 0.5,
@@ -1298,7 +1322,7 @@ def _feed_detector(tpls, threshold, wav, pre: float = 1.2, post: float = 1.0,
     parts.append(wav.astype(np.float32))
     parts.append(np.zeros(int(post * SR), dtype=np.float32))
     y = np.concatenate(parts)
-    det = Detector(tpls, threshold=threshold, cooldown=0.0)
+    det = Detector(tpls, threshold=threshold, cooldown=0.0, strict=False)
     hits: list[dict] = []
     for i in range(0, len(y) - block + 1, block):
         for ev in det.process(y[i:i + block]):
@@ -1649,4 +1673,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+
 
