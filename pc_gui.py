@@ -69,6 +69,7 @@ class App:
         self._hit_reset_job = None
         self.last_hit_at = ""
         self.last_hit_label = ""
+        self._lvl_hist: list[float] = []
         self._advanced_open = False
         self.panel = None
         self.history: list[dict] = []
@@ -132,11 +133,13 @@ class App:
         self.lbl_db = tk.Label(lv, text="-- dB", bg=C_BG, fg=C_SUB, width=20, anchor="w",
                                font=("Consolas", 9))
         self.lbl_db.pack(side="left")
+        self.lbl_env = tk.Label(lv, text="", bg=C_BG, fg=C_SUB, font=(FONT, 8))
+        self.lbl_env.pack(side="left", padx=6)
 
         # ---- 主按钮 ----
         main = tk.Frame(self.root, bg=C_BG)
         main.pack(fill="x", padx=14, pady=8)
-        self.btn_learn = tk.Button(main, text="① 学习门铃（按 2 次）", command=self._learn,
+        self.btn_learn = tk.Button(main, text="① 学习门铃（可选）", command=self._learn,
                                    bg="#2f6fb3", fg="white", relief="flat",
                                    font=(FONT, 12, "bold"), height=2,
                                    activebackground="#285f99", activeforeground="white")
@@ -264,7 +267,7 @@ class App:
         self.footer.configure(text=f"模板（{len(self.templates)}）：{names or '还没学习'}")
         if self.templates:
             self.btn_toggle.configure(state="normal")
-            self._log(f"已加载模板：{names}")
+            self._log(f"已加载模板（内置门铃开箱即用，无需学习）：{names}")
         else:
             self.btn_toggle.configure(state="disabled")
             self.lbl_big.configure(text="请先学习门铃", fg="#b6bec7")
@@ -476,6 +479,17 @@ class App:
                     else:
                         self.meter["value"] = _clip_db(db)
                         self.lbl_db.configure(text=f"{db:6.1f} dB（底噪 {floor:5.1f}）")
+                        self._lvl_hist.append(db)
+                        if len(self._lvl_hist) > 40:
+                            self._lvl_hist.pop(0)
+                        med = float(np.median(self._lvl_hist))
+                        if med >= -12:
+                            self.lbl_env.configure(text="⚠ 麦克风削波：请关闭麦克风增强/降低音量",
+                                                   fg=C_HIT)
+                        elif med >= -30:
+                            self.lbl_env.configure(text="环境偏吵（建议靠近声源或降噪）", fg=C_CAPTURE)
+                        else:
+                            self.lbl_env.configure(text="环境安静", fg=C_LISTEN)
                 elif kind == "state":
                     self.lbl_state.configure(text=kw["text"])
                     self.dot.configure(fg=kw["color"])
@@ -664,4 +678,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 

@@ -589,15 +589,15 @@ def structural_class(m: dict) -> tuple[str, float]:
     """
     if not m:
         return "", 0.0
-    if m["n_pulse"] >= 3 and m["short_gaps"] >= 2:
+    if m["n_pulse"] >= 3 and m["short_gaps"] >= 2 and m["conc_p90"] >= 0.55:
         return "fire", min(1.0, m["n_pulse"] / 3.0)
-    if (m["n_pulse"] >= 2 and m["short_gaps"] >= 1 and m["conc_p90"] >= 0.45
-            and m["n_knock"] >= 3):
+    if (m["n_pulse"] >= 2 and m["short_gaps"] >= 1 and m["conc_p90"] >= 0.62
+            and m["n_knock"] >= 5):
         return "fire", min(1.0, m["n_pulse"] / 3.0)
-    if m["sustain"] >= 0.60 and m["conc_p90"] >= 0.65 and m["short_gaps"] < 2:
-        return "kettle", min(1.0, m["sustain"] / 1.2)
-    if (m["n_knock"] >= 3 and m["conc_p90"] < 0.45 and m["sustain"] < 0.25
-            and m.get("burst_med", 1.0) <= 0.12 and m.get("low_tonal", 0) >= 30):
+    if m["sustain"] >= 0.70 and m["conc_p90"] >= 0.75 and m["short_gaps"] < 2:
+        return "kettle", min(1.0, m["sustain"] / 1.4)
+    if (m["n_knock"] >= 3 and m["conc_p90"] < 0.40 and m["sustain"] < 0.15
+            and m.get("burst_med", 1.0) <= 0.10 and m.get("low_tonal", 0) >= 35):
         return "knock", min(1.0, m["n_knock"] / 4.0)
     if (m["conc_p90"] >= 0.85 and 0.20 <= m["sustain"] <= 0.60
             and m["n_pulse"] <= 1 and m["n_knock"] <= 1):
@@ -800,8 +800,14 @@ class Detector:
             else:
                 self.floor = float(np.percentile(self.noise, 30))
                 self.floor = max(-70.0, min(-25.0, self.floor))
-            if (db > self.floor + self.gate_db and db > -70
-                    and now - self.last_hit > self.cooldown):
+            # 短时底噪（最近约 1 秒）：对“突然出现的声音”更敏感，噪声环境也能触发
+            short = (float(np.median(self.noise[-20:]))
+                     if len(self.noise) >= 20 else self.floor)
+            short = max(-70.0, min(-25.0, short))
+            gate = self.floor + self.gate_db
+            onset_gate = short + max(4.0, self.gate_db - 3.0)
+            if (self.state == "idle" and db > -70 and now - self.last_hit > self.cooldown
+                    and (db > gate or db > onset_gate)):
                 self.state, self.buf, self.cap_quiet = "capture", [block], 0
                 self.t_onset, self.last_try_dur = now, 0.0
                 self.best_score, self.best_who = 0.0, ""
