@@ -459,6 +459,7 @@ def analyze(x: np.ndarray, templates: list[Template]) -> tuple[float, str]:
 # ----------------------------- 多类事件：结构特征（无需学习） -----------------------------
 BUILTIN_AUDIO = os.path.join(SOUND_DIR, "builtin_audio")
 BUILTIN_TPL = os.path.join(SOUND_DIR, "builtin_tpl")
+CALIB_TPL = os.path.join(SOUND_DIR, "calib_tpl")
 EVENT_CLASSES = {
     "doorbell": {"label": "门铃", "tier": "L1"},
     "knock":    {"label": "敲门", "tier": "L1"},
@@ -736,7 +737,7 @@ class Detector:
         if s_cls in ("fire", "kettle", "knock"):
             return {**base, "state": "hit", "cls": s_cls, "conf": max(s_conf, 0.6)}
 
-        # 2) 模板命中（房间模板，声音一出现就能对上）
+        # 2) 模板命中（仅当该类有自己的模板时；门铃单独处理）
         t_thr = TPL_THRESHOLDS.get(t_cls, self.threshold)
         if (t_cls and t_cls != "doorbell" and t_score >= t_thr
                 and (t_score - t_second) >= 0.04):
@@ -1151,11 +1152,102 @@ def builtin_refs(cls: str = "doorbell") -> list[str]:
 
 
 def learned_refs() -> list[str]:
-    """当前可用的参考：用户学习的门铃 + 内置干净门铃（三类事件靠结构规则识别）。"""
-    files = sorted(glob.glob(os.path.join(SOUND_DIR, "learned_*.wav")))
+    """当前可用的参考：现场校准模板（最优先）+ 用户学习结果 + 内置门铃。"""
+    files = sorted(glob.glob(os.path.join(CALIB_TPL, "*.wav")))
+    files += sorted(glob.glob(os.path.join(SOUND_DIR, "learned_*.wav")))
     if not files:
-        files = sorted(glob.glob(os.path.join(SOUND_DIR, "room_ref*.wav")))
+        files += sorted(glob.glob(os.path.join(SOUND_DIR, "room_ref*.wav")))
     return files + builtin_refs("doorbell")
+
+
+def extract_calib_segment(rec: np.ndarray, pre_sec: float = 0.5,
+                          max_sec: float = 2.0) -> np.ndarray | None:
+    """从校准录音里截一段：优先从起音开始，否则取能量最强的一段。"""
+    db = frame_db(rec)
+    if len(db) < 10:
+        return None
+    pre = max(1, int(pre_sec / (HOP / SR)))
+    amb = float(np.percentile(db[:pre], 90))
+    th = amb + 6.0
+    idx = np.where(db > th)[0]
+    if len(idx) >= 3:
+        a = max(0, int(idx[0] * HOP - 0.05 * SR))
+    else:
+        k = int(max_sec * SR)
+        if len(rec) <= k:
+            a = 0
+        else:
+            best_i, best_e = 0, -1.0
+            for i in range(0, len(rec) - k, max(1, int(0.05 * SR))):
+                e = float(np.mean(rec[i:i + k].astype(np.float64) ** 2))
+                if e > best_e:
+                    best_i, best_e = i, e
+            a = best_i
+    b = min(len(rec), a + int(max_sec * SR))
+    seg = rec[a:b]
+    if len(seg) < int(0.5 * SR):
+        return None
+    rms = float(np.sqrt(np.mean(seg.astype(np.float64) ** 2)) + 1e-9)
+    return (seg * (10 ** ((-20.0 - 20 * np.log10(rms)) / 20))).astype(np.float32)
+
+
+def calibrate_events(play_fn, classes=None, passes: int = 2,
+                     progress=None, device: int | None = None,
+                     settle: float = 1.8) -> list[str]:
+    """现场校准：逐类播放内置声音并录音，保存为模板（放 4 段，约 40 秒）。
+
+    play_fn(x, sr) 负责把 16k 单声道音频播出来（GUI/CLI 各自实现）。
+    返回成功的类别列表。
+    """
+    classes = classes or list(EVENT_CLASSES)
+    os.makedirs(CALIB_TPL, exist_ok=True)
+    for f in glob.glob(os.path.join(CALIB_TPL, "*.wav")):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    rec = Recorder(device)
+    rec.start()
+    ok: list[str] = []
+    try:
+        for cls in classes:
+            path = os.path.join(BUILTIN_AUDIO, f"{cls}.wav")
+            if not os.path.exists(path):
+                continue
+            x, sr = load_wav(path)
+            takes = []
+            for t in range(passes):
+                if progress:
+                    progress({"kind": "calib_start", "cls": cls, "index": t + 1,
+                              "total": passes})
+                time.sleep(settle)           # 等环境/AGC 稳定
+                t0 = time.time()
+                parts = []
+                while time.time() - t0 < 0.5:
+                    b = rec.read_block(timeout=0.5)
+                    if b is not None:
+                        parts.append(b)
+                try:
+                    play_fn(x, sr)
+                except Exception:            # noqa: BLE001
+                    pass
+                while time.time() - t0 < 0.5 + len(x) / sr + 1.0:
+                    b = rec.read_block(timeout=0.5)
+                    if b is not None:
+                        parts.append(b)
+                seg = extract_calib_segment(np.concatenate(parts), 0.5)
+                if seg is not None:
+                    takes.append(seg)
+                time.sleep(0.2)
+            for i, seg in enumerate(takes[:2]):
+                save_wav(os.path.join(CALIB_TPL, f"{cls}_c{i + 1}.wav"), seg)
+            if takes:
+                ok.append(cls)
+            if progress:
+                progress({"kind": "calib_done", "cls": cls, "takes": len(takes)})
+    finally:
+        rec.stop()
+    return ok
 
 
 CONFIG_PATH = os.path.join(SOUND_DIR, "config.json")

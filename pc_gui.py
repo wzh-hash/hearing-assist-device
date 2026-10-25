@@ -70,6 +70,9 @@ class App:
         self.last_hit_at = ""
         self.last_hit_label = ""
         self._lvl_hist: list[float] = []
+        self._play_lock = threading.Lock()
+        self._play_stream = None
+        self._demo_q: queue.Queue = queue.Queue()
         self._advanced_open = False
         self.panel = None
         self.history: list[dict] = []
@@ -421,6 +424,15 @@ class App:
 
     def _stop_listen(self):
         self.stop_evt.set()
+        while True:
+            try:
+                self._demo_q.get_nowait()
+            except queue.Empty:
+                break
+        w = self.worker
+        if w is not None and w.is_alive():
+            w.join(timeout=3.0)          # 等录音线程把流关掉，避免退出时崩
+        self.worker = None
         if self._hit_reset_job:
             self.root.after_cancel(self._hit_reset_job)
             self._hit_reset_job = None
@@ -433,7 +445,32 @@ class App:
         self.lbl_db.configure(text="-- dB")
         self._log("停止监听")
 
+    def _run_demo(self, det, demo):
+        """演示回放：把内置音频按实时节奏送进检测器（不经麦克风，保证演示可见）。"""
+        cls, x = demo
+        det.reset()
+        block = int(R.SR * R.BLOCK_SEC)
+        y = np.concatenate([
+            np.zeros(int(0.30 * R.SR), dtype=np.float32),
+            x.astype(np.float32),
+            np.zeros(int(0.80 * R.SR), dtype=np.float32),
+        ])
+        got = False
+        for i in range(0, len(y) - block + 1, block):
+            if self.stop_evt.is_set():
+                return
+            for ev in det.process(y[i:i + block]):
+                if ev["type"] == "hit":
+                    ev["demo"] = True
+                    got = True
+                if ev["type"] in ("hit", "ignore"):
+                    self._post("event", ev=ev)
+            time.sleep(R.BLOCK_SEC)
+        if not got:
+            self._post("log", text="演示回放未命中（请重试）")
+
     def _listen_worker(self, threshold: float, gate: float, device):
+        rec = None
         try:
             det = R.Detector(self.templates, threshold=threshold, gate_db=gate,
                              save_dir=os.path.join(R.SOUND_DIR, "events"))
@@ -441,6 +478,13 @@ class App:
             rec.start()
             self._post("state", text="监听中", color=C_LISTEN)
             while not self.stop_evt.is_set():
+                try:
+                    demo = self._demo_q.get_nowait()
+                except queue.Empty:
+                    demo = None
+                if demo is not None:
+                    self._run_demo(det, demo)
+                    continue
                 block = rec.read_block(timeout=0.3)
                 if block is None:
                     continue
@@ -458,10 +502,14 @@ class App:
                             ev["tpl_scores"], ev["peak_db"] = [], -120.0
                         ev["snr"] = ev["peak_db"] - det.floor
                     self._post("event", ev=ev)
-            rec.stop()
         except Exception as e:  # noqa: BLE001
             self._post("error", text=f"{type(e).__name__}: {e}")
         finally:
+            if rec is not None:
+                try:
+                    rec.stop()           # 无论循环怎么退出都要关流
+                except Exception:  # noqa: BLE001
+                    pass
             self._post("state", text="已停止", color=C_STOP)
 
     # ============================================================ 轮询
@@ -521,6 +569,10 @@ class App:
         entry = {
             "time": time.strftime("%H:%M:%S"),
             "type": ev["type"],
+            "cls": ev.get("cls", ""),
+            "label": ev.get("label", ""),
+            "tier": ev.get("tier", ""),
+            "demo": bool(ev.get("demo")),
             "score": float(ev["score"]),
             "latency_ms": float(ev["latency"]) * 1000,
             "dur": float(ev["dur"]),
@@ -553,7 +605,8 @@ class App:
             self.lbl_detail.configure(
                 text=f"{tier}　得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　"
                      f"{self.last_hit_at}")
-            self._log(f"命中 {label}（{tier}） conf={ev.get('conf', 0):.2f} "
+            self._log(f"{'演示命中' if ev.get('demo') else '命中'} {label}（{tier}） "
+                      f"conf={ev.get('conf', 0):.2f} "
                       f"score={ev['score']:.3f}  "
                       f"敲击={ev.get('n_knock', 0)} 脉冲={ev.get('n_pulse', 0)} "
                       f"持续={ev.get('sustain', 0):.2f}s  "
@@ -627,21 +680,54 @@ class App:
             self._log(f"打不开文件夹：{e}")
 
     def _play_wav(self, path: str, gain: float = 0.35):
+        """独立 OutputStream 播放（不用全局 sd.play，避免与监听流并发引发堆损坏）。"""
         import sounddevice as sd
 
-        idx = self._selected_out()
-        x, sr = R.load_wav(path)
-        info = sd.query_devices(idx, "output") if idx is not None else sd.query_devices(kind="output")
-        out_sr = int(info["default_samplerate"] or 48000)
-        n = int(len(x) * out_sr / sr)
-        y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
-        sd.play(np.clip(y * gain, -1, 1), out_sr, device=idx)
-        sd.wait()
+        if not self._play_lock.acquire(blocking=False):
+            self._log("上一个声音还在播放，稍后再点")
+            return
+        stream = None
+        try:
+            idx = self._selected_out()
+            x, sr = R.load_wav(path)
+            info = (sd.query_devices(idx, "output") if idx is not None
+                    else sd.query_devices(kind="output"))
+            out_sr = int(info["default_samplerate"] or 48000)
+            n = int(len(x) * out_sr / sr)
+            y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
+            y = np.clip(y * gain, -1, 1).astype(np.float32).reshape(-1, 1)
+            stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32",
+                                     device=idx)
+            self._play_stream = stream
+            stream.start()
+            block = 4096
+            for i in range(0, len(y), block):
+                stream.write(y[i:i + block])
+        finally:
+            if stream is not None:
+                try:
+                    stream.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    stream.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._play_stream = None
+            self._play_lock.release()
 
     def _play_class(self, cls: str):
+        """试听 = 演示回放：扬声器播放 + 同一段音频直接送进识别管线（保证演示可见）。"""
+        try:
+            x, sr = R.load_wav(os.path.join(R.BUILTIN_AUDIO, f"{cls}.wav"))
+            if self.worker is not None and self.worker.is_alive():
+                self._demo_q.put((cls, R.to_16k(x, sr)))
+        except Exception as e:  # noqa: BLE001
+            self._log(f"演示音频加载失败：{e}")
+
         def run():
             try:
-                self._post("log", text=f"播放 {R.EVENT_CLASSES[cls]['label']} 样本…")
+                self._post("log", text=f"演示：播放并识别 {R.EVENT_CLASSES[cls]['label']}…")
                 self._play_wav(os.path.join(R.BUILTIN_AUDIO, f"{cls}.wav"))
             except Exception as e:  # noqa: BLE001
                 self._post("log", text=f"播放失败：{e}")
@@ -658,6 +744,16 @@ class App:
 
     def _on_close(self):
         self.stop_evt.set()
+        try:
+            if self.worker is not None and self.worker.is_alive():
+                self.worker.join(timeout=3.0)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self._play_stream is not None:
+                self._play_stream.stop()
+        except Exception:  # noqa: BLE001
+            pass
         time.sleep(0.1)
         self.root.destroy()
 
