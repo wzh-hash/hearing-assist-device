@@ -1,14 +1,14 @@
-# 门铃识别 · 单场景 Demo（纯识别版）
+# 门铃识别 · 环境事件识别台
 
-给听障人士的 Demo：电脑麦克风听到声音，判断“是不是门铃”，命中后大字提示。
+给听障人士的 Demo：电脑麦克风听到声音，判断门铃 / 敲门 / 水壶鸣笛 / 火警警报，命中后网页大字提示，并通过 IoT 让行空板 K10 同步动作。
 
-**设计原则：主界面只留两件事——「学习门铃」「开始监听」。阈值、门控、麦克风全部收进「高级设置」，默认不用碰。**
+**产品界面是网页**：双击 `run_gui.bat` → 自动打开浏览器里的「环境事件识别台」。局域网内手机/平板/投影可同时打开；经典桌面窗口保留为 `run_gui_classic.bat`。
 
-> **需求文档（唯一真相源）**：`docs/REQ-01-iot.md`、`docs/REQ-02-webui.md`、`docs/plan.md`、`docs/decisions.md`。
+**设计原则：主界面只留两件事——「学习门铃」「开始监听」。阈值、门控、麦克风全部收进「设置」，默认不用碰。**
+
+> **需求与设计（唯一真相源）**：`docs/REQ-01-iot.md`、`docs/REQ-02-webui.md`、`docs/plan.md`、`docs/decisions.md`、`docs/DESIGN-webui.md`。
 >
-> 这两份 v1.1 描述的是**目标状态**，尚未实施；本 README 其余内容描述的是**当前**桌面版行为，两者冲突时以 `docs/` 为准。
->
-> 已知差异：学习次数（当前 2 次 → 目标默认 3 次）、前端（当前桌面窗口 → 目标网页）、双击入口（当前开窗口 → 目标开网页）。
+> 识别算法、声学参数、判定逻辑未改动；网页服务端只在外围接线（`pc_web.py` + `web/`），与识别、播放、IoT 同进程。
 
 ```
 麦克风 → 能量门控（50ms 块） → 边听边判（0.35s 起） → NCC 模板匹配（多模板 + 时间伸缩变体）
@@ -21,19 +21,23 @@
 
 ## 一、怎么用（就两步）
 
-**双击 `run_gui.bat`**：
+**双击 `run_gui.bat`**，浏览器会自动打开控制台（本机 `http://127.0.0.1:8765`）。
 
-1. 点 **「① 学习门铃（按 2 次）」**
-   - 界面提示“请按门铃（1/2）”
-   - 按一次门铃（或手机播放一次门铃声音），重复 2 次
-   - 只有“没听到 / 太小声 / 有效声音太短”才会要求重按；最多尝试 8 次
-   - 只录到 1 次也算学习成功（会提示“建议再学一次”）
-2. 点 **「② 开始监听」**
-   - 再按门铃 → 大字 **「门铃！」** + 得分 + 延迟
+1. 页面显示「待机」且模板数大于 0 时，点 **「开始监听」**；没有模板先点 **「学习门铃」**。
+   - 学习：按页面提示按 3 次门铃（次数可在「设置」改 1–5）；只录到 1 次也算成功，会提示再学一次。
+   - 学习中可以取消；取消后模板和阈值保持不变。
+2. 再按门铃 → 大字 **「门铃！」** + 得分 + 延迟；3.5 秒后回到「监听中」，副文案保留上一声的时刻。
+3. 试听：点「门铃 / 敲门 / 水壶鸣笛 / 火警警报」会从**电脑音箱**出声，并生成一条带「演示」标记的命中；播放期间不会产生额外的真实命中。
+4. 手机：与电脑连同一 Wi-Fi，打开页面顶部「局域网」地址；第一次 Windows 防火墙弹窗点「允许」。
+5. 回退：`run_gui_classic.bat` 打开经典桌面窗口，行为与改动前一致。
+
+启动后终端会打印本机与局域网地址；`Ctrl+C` 停止服务。关闭页面不会停止识别，重新打开会立即恢复状态与最近事件。
 
 ---
 
 ## 二、演示数据面板（给老师 / 评委看）
+
+> 网页版按 D-11 **不搬**波形/频谱曲线，指标数字进「事件详情」；本节描述的是 `run_gui_classic.bat` 经典窗口的独立数据面板。
 
 主界面右上角点 **「📊 演示数据」**，打开独立数据窗口：
 
@@ -136,19 +140,27 @@ run.bat selftest
 
 ```
 doorbell/
-├─ run_gui.bat         启动图形界面 ← 双击这个
-├─ src/pc_gui.py           主界面（学习 / 监听 / 日志 / 打开数据面板）
-├─ src/pc_dash.py          演示数据面板（波形 / 梅尔谱 / 得分 / 轨迹 / CSV）
+├─ run_gui.bat         启动网页控制台（默认）← 双击这个
+├─ run_gui_classic.bat  启动经典桌面窗口（回退）
+├─ pc_web.py            网页入口：识别 / 播放 / IoT / HTTP 同进程
+├─ web/app.py           识别、学习、试听、设置、IoT 编排
+├─ web/state.py         状态总线（快照 / 事件 / 日志 / SSE）
+├─ web/http_api.py      静态页面 + JSON API + SSE + CSV + 录音
+├─ web/audio.py         服务端扬声器播放（试听 / 测试音 / 模板试听）
+├─ web/config.py        sounds/config.json 读写、校验、口令散列
+├─ web/static/          页面：index.html / style.css / app.js / mock.js
+├─ src/pc_gui.py        经典窗口（学习 / 监听 / 日志 / 演示数据面板）
+├─ src/pc_dash.py       经典窗口的演示数据面板
 ├─ run.bat             命令行启动器
-├─ src/pc_recognizer.py    识别核心（门控 / 特征 / 匹配 / 学习 / 状态机）
-├─ start_silent.vbs    静默后台监听（无窗口，写 recog.log）
-├─ sounds/             门铃音频；学习后生成 learned_*.wav 和 config.json
-├─ sounds_raw/         原始下载音频（Wikimedia Commons，Public Domain / CC0）
-├─ lib/                依赖库
-├─ assets/gui-screenshot.png  主界面截图
-├─ assets/dash-screenshot.png 数据面板截图
-├─ _install_deps.py    依赖丢了用它重装
-└─ _get_sound.py       门铃音频丢了用它重下
+├─ src/pc_recognizer.py 识别核心（门控 / 特征 / 匹配 / 学习 / 状态机）
+├─ docs/DESIGN-webui.md 网页设计定稿与接口契约
+├─ assets/web-desktop.png / web-phone.png  网页截图
+├─ assets/gui-screenshot.png  经典窗口截图
+├─ sounds/              门铃音频；学习后生成 learned_*.wav 和 config.json
+├─ sounds/iot.json      IoT 配置（含密码，gitignore，不进版本库）
+├─ sounds_raw/          原始下载音频（Wikimedia Commons，Public Domain / CC0）
+├─ lib/                 依赖库（必须随目录拷贝）
+└─ tools/               IoT / 板子自测、网页预览（web_preview.py）
 ```
 
 > 不要直接用系统 `python`：本机 Python 没有 `sounddevice`。`run_gui.bat` / `run.bat` 会自动使用带依赖的运行时。
@@ -169,6 +181,9 @@ run.bat selftest                :: 离线自检
 
 ## 八、已知限制（演示时照实说）
 
+- 网页只服务局域网：不暴露公网；手机打不开先检查 Windows 防火墙，或确认页面「设置」里的局域网开关是开的。
+- IoT 需要现场在页面填写 `Iot_id` / `Iot_pwd` / 两个主题；仓库不含任何凭证（`sounds/iot.json` 被 gitignore）。
+- 学习与识别的现场声学建议不变（见下）；网页只负责展示与操作。
 - 只认**学过的那个门铃声音**，不认“所有门铃”；
 - 学习时和演示时的**手机位置、音量尽量一致**；
 - 电脑喇叭播放时，Windows 回声消除可能把声音从麦克风里抹掉（偶发没反应）——**用手机播放不受影响**；
@@ -180,7 +195,8 @@ run.bat selftest                :: 离线自检
 ## 九、物联网（EasyIoT → 行空板 K10）的位置
 
 命中事件在 `Detector` 返回的 `{"type": "hit", "score": ..., "latency": ...}` 里：
-- GUI：`src/pc_gui.py` 的 `_on_event()`
+- 网页：`web/app.py` 的 `_record_event()` → `IotLink.publish()`（`doorbell/iot/`）
+- 经典 GUI：`src/pc_gui.py` 的 `_on_event()`
 - 命令行：`src/pc_recognizer.py` 的 `cmd_listen()`
 
 对接约定见 **[docs/REQ-01-iot.md](docs/REQ-01-iot.md)**：

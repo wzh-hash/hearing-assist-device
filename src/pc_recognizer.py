@@ -1321,11 +1321,26 @@ CONFIG_PATH = os.path.join(SOUND_DIR, "config.json")
 
 
 def save_config(data: dict) -> None:
+    """持久化配置。
+
+    合并写入：旧版本只保存 ``threshold``，新网页会把门控、设备、局域网、口令
+    等字段一起放进同一个文件；任何调用方只更新自己的字段，不得把别人的字段
+    顺手清掉（WEB-9.9）。识别逻辑不读取这里的扩展字段。
+    """
     try:
         import json
         os.makedirs(SOUND_DIR, exist_ok=True)
+        current: dict = {}
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                current = loaded
+        except (OSError, ValueError):
+            current = {}
+        current.update(data or {})
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(current, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
 

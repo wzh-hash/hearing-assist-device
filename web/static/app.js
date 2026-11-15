@@ -253,6 +253,7 @@
     el.learn = $('#learn');
     el.learnSegments = $('#learn-segments');
     el.learnBar = $('#learn-bar');
+    el.learnMsg = $('#learn-msg');
     el.learnHint = $('#learn-hint');
     el.actions = $('#actions');
     el.btnListen = $('#btn-listen');
@@ -390,7 +391,8 @@
 
   function renderHeader(snapshot) {
     const net = snapshot.net || {};
-    setText(el.addrLan, stripProto(net.lan) || '—');
+    const lanOn = net.lan_enabled !== false;
+    setText(el.addrLan, lanOn ? '已开启 ' + (stripProto(net.lan) || '—') : '已关闭');
     setText(el.addrLocal, stripProto(net.local) || '—');
 
     const iot = (snapshot.iot && snapshot.iot.state) || 'unset';
@@ -605,6 +607,9 @@
       const windowSec = learning.window || 15;
       const pct = clamp(((learning.remaining || 0) / windowSec) * 100, 0, 100);
       el.learnBar.style.width = pct.toFixed(1) + '%';
+      const message = learning.message || '';
+      setText(el.learnMsg, message);
+      el.learnMsg.hidden = !message;
     }
 
     // 动作
@@ -841,6 +846,7 @@
           '<div class="range"><input type="range" id="set-gate" min="6" max="30" step="1" value="' + (config.gate_db || 8) + '" aria-label="门控"></div>' +
           '<span class="field__hint">比底噪高多少分贝才算一次声响。</span>' +
         '</div>' +
+        '<p class="section__note">阈值与门控保存后立即生效；麦克风与播放设备在下一次开始时生效。</p>' +
       '</section>' +
       '<section class="section">' +
         '<h3 class="section__title">学习</h3>' +
@@ -1007,7 +1013,7 @@
         '</dl>' +
         (iot.last_error ? '<p class="field__err" id="iot-error">' + esc(iot.last_error) + '</p>' : '<p class="field__err" id="iot-error" hidden></p>') +
         '<button class="btn btn--ghost btn--sm" id="iot-test" type="button" style="margin-top:12px">测试连接</button>' +
-        '<p class="section__note">上报状态异常不影响识别与事件记录。</p>' +
+        '<p class="section__note">测试连接使用已保存的配置；上报状态异常不影响识别与事件记录。</p>' +
       '</section>' +
       '<section class="section">' +
         '<h3 class="section__title">上报配置</h3>' +
@@ -1386,7 +1392,12 @@
   }
 
   function copyAddress() {
-    const lan = (S.snap && S.snap.net && S.snap.net.lan) || '';
+    const net = (S.snap && S.snap.net) || {};
+    if (net.lan_enabled === false) {
+      toast('局域网访问已关闭，仅本机可访问');
+      return;
+    }
+    const lan = net.lan || '';
     if (!lan) return;
 
     const fallback = function () {

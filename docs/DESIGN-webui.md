@@ -1,6 +1,6 @@
 # 前端设计定稿 · 环境事件识别台
 
-**版本** v0.1（2026-11-15）｜ **状态** 设计定稿，已实现预览版 ｜ **关联** `REQ-02-webui.md`（v1.1）、`plan.md` T2 / T3 / T5 / T6 / T7
+**版本** v0.2（2026-11-15）｜ **状态** 设计定稿，已实现（真实服务端 + 网页） ｜ **关联** `REQ-02-webui.md`（v1.1）、`plan.md` T1–T8、`run_gui.bat`
 
 > 本文只描述视觉与交互方案，不重复需求条文。需求编号（WEB-x、NFR-x、D-x）指向 `docs/REQ-02-webui.md` 与 `docs/decisions.md`。
 
@@ -8,12 +8,12 @@
 
 ## 1. 范围与已定方向
 
-本轮交付：**静态前端 + 零依赖预览服务（模拟状态）**。真实识别接入（`pc_web.py`、状态总线、`Detector/Recorder`）不在本轮，接口按 `plan.md` 的 API 草案预留。
+本轮交付：**网页前端 + 同进程真实服务端**。识别、学习、播放、设置、IoT 与 HTTP/SSE 都在 `pc_web.py` 一个进程里；`run_gui.bat` 已切换为网页入口，经典窗口由 `run_gui_classic.bat` 回退。`tools/web_preview.py` 保留为**不接麦克风的界面预览**（模拟数据）。
 
 | 决策 | 结论 |
 |---|---|
 | 视觉方向 | **监听仪**：浅色仪器面，环即音量条，颜色只承载语义 |
-| 交付边界 | `web/static/` 静态页 + `tools/web_preview.py`（stdlib，模拟数据，SSE） |
+| 交付边界 | `web/static/` 页面 + `pc_web.py` / `web/*` 真实服务端；`tools/web_preview.py` 仅用于界面预览 |
 | 布局 | 单屏分区：顶栏 / 中央仪表 / 右侧事件账本 / 底栏读数 |
 | 首屏密度 | 中等：大字、音量、最近事件、命中数、模板数 |
 | 投屏模式 | 不做独立路由；普通页面在 1920×1080 下自适应放大 |
@@ -24,7 +24,7 @@
 | 事件详情 | 桌面右侧抽屉 / 手机底部面板 |
 | 次级面板 | 三个入口：设置、上报、记录 |
 | 断线 | 顶部横幅 + 最后更新时间；不遮罩、不清空数据 |
-| Electron | 相对路径、单一 `api.js` 取数入口、`window.__DOORBELL__` 可选、`?mock=1` 可脱离 Python 运行 |
+| Electron | 相对路径、单一 `bus` 取数入口、`window.__DOORBELL__` 可注入、`?mock=1` 可脱离 Python 运行 |
 
 ---
 
@@ -220,43 +220,47 @@
 ## 9. 怎么跑
 
 ```bat
-:: 预览服务（模拟数据，不接麦克风）
+:: 正常启动（推荐）：双击 run_gui.bat，等价于
+python pc_web.py
+
+:: 本机测试 / 指定端口 / 不自动开浏览器
+python pc_web.py --no-browser --no-lan --port 8766
+
+:: 经典桌面窗口（回退）
+run_gui_classic.bat
+
+:: 只预览界面，不接麦克风（模拟数据）
 python tools\web_preview.py
-
-:: 指定端口 / 只本机 / 不自动开浏览器
-python tools\web_preview.py --port 8766 --no-lan
-python tools\web_preview.py --open
-
-:: 页面直接打开、不启服务（本地模拟）
 web\static\index.html?mock=1
-
-:: 口令演示（可选）
-python tools\web_preview.py --password 1234
 ```
 
-启动后终端会打印本机与局域网地址；手机与电脑连同一 Wi-Fi 打开局域网地址即可。首次可能需要在 Windows 防火墙弹窗中点「允许」（WEB-1.12）。
+`pc_web.py` 启动后自动打开浏览器，终端打印本机与局域网地址；端口 8765→8766→8767 退让，第二次双击会直接打开已有实例。手机与电脑连同一 Wi-Fi 打开局域网地址；首次可能需要在 Windows 防火墙弹窗中点「允许」（WEB-1.12）。
+
+口令在页面「设置 → 局域网与访问」里开启；只保存 PBKDF2 散列，`sounds/config.json` 里没有明文。`--no-lan` 仅用于本机测试（绑定 127.0.0.1，手机无法打开）。
 
 ---
 
 ## 10. 本轮实现边界
 
-**已完成**
+**已完成（真实接线）**
 
-- `web/static/`：单页 HTML / CSS / JS，无框架、无构建、无外部资源；桌面与手机两套布局。
-- 大字区、刻度环、音量与底噪、监听、学习（k/N + 15 秒倒计时 + 取消）、四类试听与测试音、事件账本、事件详情、设置 / 上报 / 记录三个抽屉、口令页、断线横幅、CSV 导出、录音播放与下载。
-- `?mock=1` 本地状态机：`file://` 直接打开也能完整走界面，顶栏标「模拟数据」。
-- `tools/web_preview.py`：stdlib 预览服务，SSE 8 Hz、事件/日志即时、1 Hz 心跳、端口 8765→8766→8767 退让、默认局域网绑定、可选口令、事件录音合成。
-- 已按 Electron 要求收敛：相对路径、单一取数入口、`window.__DOORBELL__` 可注入、无服务端注入变量。
+- `pc_web.py`：识别 / 播放 / IoT / HTTP 同进程；单实例健康探测；端口 8765→8767 退让；默认局域网绑定；`--no-lan` / `--no-browser`；启动器三级回退；Ctrl+C 释放麦克风、音频与 IoT。
+- `web/app.py`：真实 `Recorder` / `Detector` 监听；`learn_doorbell` + 可取消 Recorder；试听 / 测试音 / 模板试听；播放期间抑制识别；独立 Demo Detector 生成一条演示命中；阈值/门控热更新；模板重载；`IotLink` 接线。
+- `web/state.py`：状态总线、事件、日志、统计、CSV、录音、SSE 订阅。
+- `web/http_api.py`：静态页面、JSON API、SSE、CSV、录音、口令、局域网拒绝。
+- `web/audio.py`：服务端扬声器播放（持久输出流、打断、自动限幅）。
+- `web/config.py`：`sounds/config.json` 原子合并写入 + PBKDF2 口令散列；`pc_recognizer.save_config` 改为合并写入，识别逻辑未动。
+- `run_gui.bat` 切到网页；`run_gui_classic.bat` 回退；`run.bat` 命令行不变。
+- 已验证：监听 / 停止与麦克风释放；学习启动、取消、失败提示；试听播放 + 演示命中 + 判定录音；设置持久化；口令开启/校验/清除；CSV（BOM、列序）；录音下载；单实例；局域网地址；`?mock=1`；页面 1920×1080 与 390×844。
 
-**未完成（下一轮 T1 / 真实接入）**
+**仍需现场/凭据验证**
 
-- `pc_web.py`、`web/state.py`、真实状态总线与 `Detector` / `Recorder` 接线；
-- 真实麦克风电平、真实试听播放与抑制窗口；真实 `sounds/events` 录音文件；
-- 单实例探测、`run_gui.bat` 切换、`run_gui_classic.bat` 回退、启动三级回退；
-- 真实 IoT 链路（当前 IoT 抽屉只验证表单与状态映射）；
-- 真实口令校验与存储（当前口令只在预览服务内存中，重启即失效）。
+- 用真实门铃完成一次成功学习（自动验证覆盖了取消与失败路径；成功逻辑复用现有 `learn_doorbell`）。
+- 真实 K10 板子与 EasyIoT 凭证下的 MQTT 联调（页面 / `IotLink` 已接线，本地无凭证）。
+- 3 端并发、2 小时长稳、现场防火墙。
+- 波形/频谱曲线仍不在范围（D-11）。
 
-> 预览服务**不是**产品启动器：它用模拟数据证明界面与交互，不替代计划中的 T1。
+> `tools/web_preview.py` 保留为不接麦克风的界面预览，不是产品启动器；产品入口是 `run_gui.bat` / `pc_web.py`。
 
 ---
 
@@ -275,20 +279,21 @@ python tools\web_preview.py --password 1234
 | `level_db` / `floor_db` / `env` | 电平、底噪、`quiet` / `loud` / `clip` |
 | `templates` | `{count, names[], skipped}` |
 | `last_hit` / `hit` | 最近一次命中；`hit.until` 为毫秒时间戳 |
-| `learn` | `{take, total, remaining, window, attempts}` 或 null |
+| `learn` | `{take, total, remaining, window, attempts, message}` 或 null；`message` 显示重按/录到提示 |
 | `playing` | `{cls, label, test, until}` 或 null |
-| `notice` | 6 秒短暂态：`{title, detail, ts, until}`，学习成功/失败用 |
+| `notice` | 短暂态：`{title, detail, ts, until}`；学习成功 6s、失败 8s、麦克风错误 24h |
 | `iot` / `board` | `{state,last_ok,last_error,sent,dropped,config}`、`{online}` |
 | `stats` | `{hit,ignore,demo,avg_latency,max_score,by_class}` |
 | `config` | 阈值、门控、设备序号、学习次数、局域网、`password_set` |
-| `devices` / `net` | 设备列表；本机与局域网地址、端口 |
+| `devices` / `net` | 设备列表；`{local, lan, port, lan_enabled}` |
 | `events_total` / `rec_count` | 事件总数（用于「载入更早」）与录音数 |
-| `now` / `mock` | 服务端毫秒时间；是否模拟数据 |
+| `now` / `mock` | 服务端毫秒时间；真实服务为 false |
 
 ### 11.2 接口
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
+| GET | `/api/health` | `{app:"doorbell-web",pid,port,mock:false}`；单实例探测 |
 | GET | `/api/state` | 全量快照，含最近 40 条事件与 ≤300 条日志 |
 | GET | `/api/events?before=&limit=` | 更早事件（最多 300 条） |
 | GET | `/events` | SSE：`state` 8 Hz、`event`、`log`、`heartbeat` 1 Hz，`retry: 3000` |
@@ -297,13 +302,20 @@ python tools\web_preview.py --password 1234
 | POST | `/api/preview` | `{cls}` / `{test:true}` / `{file}`；演示命中带 `demo` |
 | POST | `/api/settings` | 阈值/门控/设备/学习次数/局域网/口令；`clear_password` |
 | POST | `/api/templates/refresh` | 重新扫描模板 |
-| POST | `/api/iot/config`、`/api/iot/test` | 上报配置与测试 |
+| POST | `/api/iot/config`、`/api/iot/test` | 上报配置与测试（映射到 `doorbell.iot.IotSettings`） |
 | POST | `/api/recordings/clear` | 清空判定录音（二次确认） |
 | POST | `/api/auth` | `{password}` → HttpOnly Cookie；仅开启口令时需要 |
 | GET | `/api/export.csv` | UTF-8 BOM、列序固定、`session_YYYYMMDD_HHMMSS.csv` |
-| GET | `/api/recordings/{seq}.wav` | 单条判定录音 |
+| GET | `/api/recordings/{name}.wav` | 单条判定录音 |
 
-**注意**：SSE 的 `state` 不含 `events` / `logs`（8 Hz 下太重）；首次连接、断线重连、清空录音后，客户端会再拉一次 `/api/state` 补齐。
+**实现说明**
+
+- 真实服务端已按这份契约实现；`web/app.py` 负责识别/学习/播放/设置/IoT，`web/state.py` 是唯一状态总线。
+- `sounds/config.json` 原子合并写入；口令只保存 PBKDF2 散列与随机盐。
+- 设置保存后阈值/门控对正在运行的 Detector 即时生效；麦克风/播放设备在下一次开始时生效。
+- 播放期间丢弃麦克风块（窗口 = 播放时长 + 0.5s）；演示命中由独立的 Detector 离线生成，每次点击恰好一条，不经过真实冷却。
+- 局域网关闭时，HTTP 与 SSE 都拒绝非本机地址；单实例通过 `/api/health` 探测，第二次双击直接打开已有页面。
+- SSE 的 `state` 不含 `events` / `logs`（8 Hz 下太重）；首次连接、断线重连、清空录音后，客户端会再拉一次 `/api/state` 补齐。
 
 ---
 
@@ -317,4 +329,4 @@ python tools\web_preview.py --password 1234
 
 ![手机 390×844](../assets/web-phone.png)
 
-> 截图为 `tools/web_preview.py` 的模拟数据；顶栏「模拟数据」标记是刻意保留的诚实标注。
+> 截图为真实服务：桌面 1920×1080 是「门铃试听 → 演示命中」，手机 390×844 是监听中（真实麦克风电平）。桌面顶栏没有「模拟数据」标记；`tools/web_preview.py` 的预览页面才有。

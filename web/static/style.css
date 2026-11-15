@@ -582,6 +582,13 @@ input, select, textarea { font: inherit; color: inherit; }
   transition: width var(--t-fast) linear;
 }
 
+.learn__msg {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
 /* 动作与试听 ------------------------------------------------------------ */
 
 .actions {
