@@ -460,6 +460,7 @@ def analyze(x: np.ndarray, templates: list[Template]) -> tuple[float, str]:
 BUILTIN_AUDIO = os.path.join(SOUND_DIR, "builtin_audio")
 BUILTIN_TPL = os.path.join(SOUND_DIR, "builtin_tpl")
 CALIB_TPL = os.path.join(SOUND_DIR, "calib_tpl")
+ORIGINAL_AUDIO = os.path.join(SOUND_DIR, "original")   # 原始录音（试听播放用，不做任何处理）
 EVENT_CLASSES = {
     "doorbell": {"label": "门铃", "tier": "L1"},
     "knock":    {"label": "敲门", "tier": "L1"},
