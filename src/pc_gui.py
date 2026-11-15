@@ -21,7 +21,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE)
 LIB = os.path.join(BASE, "lib")
 if os.path.isdir(LIB) and LIB not in sys.path:

@@ -9,11 +9,11 @@ if exist "%BUNDLED%" goto usebundled
 goto usepath
 
 :usebundled
-"%BUNDLED%" -X utf8 pc_recognizer.py %*
+"%BUNDLED%" -X utf8 src\pc_recognizer.py %*
 goto after
 
 :usepath
-python -X utf8 pc_recognizer.py %*
+python -X utf8 src\pc_recognizer.py %*
 goto after
 
 :after

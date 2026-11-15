@@ -34,7 +34,7 @@ import wave
 
 import numpy as np
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LIB = os.path.join(BASE, "lib")
 if os.path.isdir(LIB) and LIB not in sys.path:   # 免 pip 安装的依赖目录
     sys.path.insert(0, LIB)

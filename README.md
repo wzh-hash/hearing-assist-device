@@ -137,16 +137,16 @@ run.bat selftest
 ```
 doorbell/
 ├─ run_gui.bat         启动图形界面 ← 双击这个
-├─ pc_gui.py           主界面（学习 / 监听 / 日志 / 打开数据面板）
-├─ pc_dash.py          演示数据面板（波形 / 梅尔谱 / 得分 / 轨迹 / CSV）
+├─ src/pc_gui.py           主界面（学习 / 监听 / 日志 / 打开数据面板）
+├─ src/pc_dash.py          演示数据面板（波形 / 梅尔谱 / 得分 / 轨迹 / CSV）
 ├─ run.bat             命令行启动器
-├─ pc_recognizer.py    识别核心（门控 / 特征 / 匹配 / 学习 / 状态机）
+├─ src/pc_recognizer.py    识别核心（门控 / 特征 / 匹配 / 学习 / 状态机）
 ├─ start_silent.vbs    静默后台监听（无窗口，写 recog.log）
 ├─ sounds/             门铃音频；学习后生成 learned_*.wav 和 config.json
 ├─ sounds_raw/         原始下载音频（Wikimedia Commons，Public Domain / CC0）
 ├─ lib/                依赖库
-├─ gui-screenshot.png  主界面截图
-├─ dash-screenshot.png 数据面板截图
+├─ assets/gui-screenshot.png  主界面截图
+├─ assets/dash-screenshot.png 数据面板截图
 ├─ _install_deps.py    依赖丢了用它重装
 └─ _get_sound.py       门铃音频丢了用它重下
 ```
@@ -180,8 +180,8 @@ run.bat selftest                :: 离线自检
 ## 九、物联网（EasyIoT → 行空板 K10）的位置
 
 命中事件在 `Detector` 返回的 `{"type": "hit", "score": ..., "latency": ...}` 里：
-- GUI：`pc_gui.py` 的 `_on_event()`
-- 命令行：`pc_recognizer.py` 的 `cmd_listen()`
+- GUI：`src/pc_gui.py` 的 `_on_event()`
+- 命令行：`src/pc_recognizer.py` 的 `cmd_listen()`
 
 对接约定见 **[docs/REQ-01-iot.md](docs/REQ-01-iot.md)**：
 
