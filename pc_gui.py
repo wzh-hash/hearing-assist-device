@@ -54,7 +54,7 @@ def _clip_db(db: float, lo: float = -70.0, hi: float = -10.0) -> float:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("门铃识别 · 演示控制台")
+        self.root.title("环境事件识别 · 演示控制台")
         self.root.geometry("720x680")
         self.root.configure(bg=C_BG)
         self.root.minsize(680, 600)
@@ -104,7 +104,7 @@ class App:
 
         header = tk.Frame(self.root, bg=C_BG)
         header.pack(fill="x", **pad)
-        tk.Label(header, text="门铃识别", bg=C_BG, fg=C_TEXT,
+        tk.Label(header, text="环境事件识别", bg=C_BG, fg=C_TEXT,
                  font=(FONT, 16, "bold")).pack(side="left")
         tk.Label(header, text="听障人士环境事件感知 · Demo", bg=C_BG, fg=C_SUB,
                  font=(FONT, 9)).pack(side="left", padx=10, pady=4)
@@ -127,10 +127,10 @@ class App:
         self.lbl_info = tk.Label(top, text="", bg=C_CARD, fg=C_SUB, font=(FONT, 9))
         self.lbl_info.pack(side="right")
 
-        self.lbl_big = tk.Label(card, text="请先学习门铃", bg=C_CARD, fg="#b6bec7",
+        self.lbl_big = tk.Label(card, text="准备就绪", bg=C_CARD, fg="#b6bec7",
                                 font=(FONT, 26, "bold"))
         self.lbl_big.pack(pady=(8, 0))
-        self.lbl_detail = tk.Label(card, text="点下面的「① 学习门铃」，然后按 3 次门铃",
+        self.lbl_detail = tk.Label(card, text="点「② 开始监听」，自动识别门铃 / 敲门 / 水壶鸣笛 / 火警警报",
                                    bg=C_CARD, fg=C_SUB, font=(FONT, 10))
         self.lbl_detail.pack(pady=(2, 14))
 
@@ -282,8 +282,8 @@ class App:
             self._log(f"已加载模板（内置门铃开箱即用，无需学习）：{names}")
         else:
             self.btn_toggle.configure(state="disabled")
-            self.lbl_big.configure(text="请先学习门铃", fg="#b6bec7")
-            self.lbl_detail.configure(text="点下面的「① 学习门铃」，然后按 2 次门铃")
+            self.lbl_big.configure(text="模板未加载", fg="#b6bec7")
+            self.lbl_detail.configure(text="请检查 sounds/original 素材，或点「① 学习门铃（可选）」")
 
     def _scan_devices(self):
         try:
@@ -344,7 +344,7 @@ class App:
         if self.learner and self.learner.is_alive():
             return
         if self.worker and self.worker.is_alive():
-            self._log("请先停止监听，再学习门铃")
+            self._log("请先停止监听，再学习门铃（学习是可选操作）")
             return
         device = self._selected_device()
         self.btn_learn.configure(state="disabled", bg="#9bb4cf")
@@ -415,7 +415,7 @@ class App:
             self._log("正在停止上一次监听，请稍候…")
             return
         if not self.templates:
-            self._log("请先学习门铃")
+            self._log("模板未加载：请稍候或重新学习门铃（可选）")
             return
         self.stop_evt.clear()
         threshold = float(self.threshold.get())
@@ -428,7 +428,7 @@ class App:
         gate = float(self.gate_db.get())
         device = self._selected_device()
         self.lbl_big.configure(text="监听中…", fg=C_LISTEN)
-        self.lbl_detail.configure(text="听到门铃会大字提示")
+        self.lbl_detail.configure(text="正在监听：门铃 / 敲门 / 水壶鸣笛 / 火警警报")
         self.lbl_state.configure(text="启动中…")
         self.dot.configure(fg=C_CAPTURE)
         self.btn_toggle.configure(text="停止监听", bg=C_HIT, activebackground="#c94a22")
@@ -489,7 +489,9 @@ class App:
         for i in range(0, len(y) - block + 1, block):
             if self.stop_evt.is_set():
                 return
-            for ev in det.process(y[i:i + block]):
+            events = det.process(y[i:i + block])
+            self._post("level", db=det.level, floor=det.floor)   # 让音量条跟着声音走
+            for ev in events:
                 if ev["type"] == "hit":
                     ev["demo"] = True
                     got = True
