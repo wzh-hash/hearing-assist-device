@@ -73,6 +73,11 @@ class App:
         self._play_lock = threading.Lock()
         self._play_stream = None
         self._play_stop = threading.Event()
+        self._out_stream = None
+        self._out_sr = None
+        self._out_idx = None
+        self._out_channels = None
+        self._stopping = False
         self._demo_q: queue.Queue = queue.Queue()
         self._advanced_open = False
         self.panel = None
@@ -90,6 +95,7 @@ class App:
         self._load_templates()
         self._scan_devices()
         self._poll()
+        self.root.after(500, self._start_preopen)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ================================================================ UI
@@ -396,12 +402,18 @@ class App:
 
     # ============================================================ 监听
     def _toggle_listen(self):
+        if self._stopping:
+            self._log("正在停止上一次监听，请稍候…")
+            return
         if self.worker and self.worker.is_alive():
             self._stop_listen()
         else:
             self._start_listen()
 
     def _start_listen(self):
+        if self._stopping:
+            self._log("正在停止上一次监听，请稍候…")
+            return
         if not self.templates:
             self._log("请先学习门铃")
             return
@@ -433,9 +445,17 @@ class App:
             except queue.Empty:
                 break
         w = self.worker
-        if w is not None and w.is_alive():
-            w.join(timeout=3.0)          # 等录音线程把流关掉，避免退出时崩
         self.worker = None
+        if w is not None and w.is_alive():
+            self._stopping = True
+            # 后台等录音线程退出，不阻塞 UI
+            def _join():
+                try:
+                    w.join(timeout=3.0)
+                except Exception:  # noqa: BLE001
+                    pass
+                self._stopping = False
+            threading.Thread(target=_join, daemon=True).start()
         if self._hit_reset_job:
             self.root.after_cancel(self._hit_reset_job)
             self._hit_reset_job = None
@@ -524,9 +544,11 @@ class App:
 
     # ============================================================ 轮询
     def _poll(self):
+        count = 0
         try:
-            while True:
+            while count < 40:              # 每次最多处理 40 条，避免 UI 长时间卡住
                 kind, kw = self.q.get_nowait()
+                count += 1
                 if kind == "event":
                     self._on_event(kw["ev"])
                 elif kind == "level":
@@ -567,7 +589,7 @@ class App:
                     self._stop_listen()
         except queue.Empty:
             pass
-        self.root.after(25, self._poll)
+        self.root.after(15 if count >= 40 else 25, self._poll)
 
     def _on_event(self, ev: dict):
         if ev["type"] == "trigger":
@@ -675,131 +697,160 @@ class App:
         except Exception as e:  # noqa: BLE001
             self._log(f"打不开文件夹：{e}")
 
-    def _play_wav(self, path: str, gain: float = 1.0):
-        """独立 OutputStream 播放原始录音（不做增益/音色处理）；支持被下一次点击打断。"""
+    # ============================================================ 播放
+    def _device_output_info(self, idx):
         import sounddevice as sd
 
-        # 打断上一个正在播放的声音
+        info = (sd.query_devices(idx, "output") if idx is not None
+                else sd.query_devices(kind="output"))
+        out_sr = int(info["default_samplerate"] or 48000)
+        channels = 2 if int(info.get("max_output_channels", 1)) >= 2 else 1
+        return out_sr, channels
+
+    def _ensure_out_stream(self, idx):
+        """打开一次输出流并复用，避免每次播放都花时间初始化音频设备。"""
+        import sounddevice as sd
+
+        out_sr, channels = self._device_output_info(idx)
+        if (self._out_stream is not None and self._out_idx == idx
+                and self._out_sr == out_sr):
+            return self._out_stream, out_sr, channels
+        self._close_out_stream()
+        t0 = time.perf_counter()
+        self._out_stream = sd.OutputStream(samplerate=out_sr, channels=channels,
+                                           dtype="float32", device=idx, latency="high")
+        self._out_sr, self._out_idx, self._out_channels = out_sr, idx, channels
+        self._post("log", text=f"播放设备已就绪（{1000*(time.perf_counter()-t0):.0f}ms）")
+        return self._out_stream, out_sr, channels
+
+    def _close_out_stream(self):
+        s = getattr(self, "_out_stream", None)
+        if s is not None:
+            try:
+                s.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                s.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._out_stream = None
+        self._out_sr = None
+        self._out_idx = None
+        self._out_channels = None
+
+    def _write_buffer(self, y, out_sr, channels):
+        stream = self._out_stream
+        data = (np.repeat(y.reshape(-1, 1), 2, axis=1) if channels == 2
+                else y.reshape(-1, 1))
+        self._play_stream = stream
+        underflows = 0
+        stream.start()
+        try:
+            block = 1024
+            for i in range(0, len(data), block):
+                if self._play_stop.is_set():      # 被新的点击打断
+                    break
+                if stream.write(data[i:i + block]):
+                    underflows += 1
+        finally:
+            try:
+                stream.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._play_stream = None
+        if underflows:
+            self._post("log", text=f"播放缓冲不足 {underflows} 次（可能有轻微断续）")
+
+    def _play_wav(self, path: str, gain: float = 1.0, idx=None):
+        """复用已打开的输出流播放；支持被下一次点击打断。"""
         self._play_stop.set()
         if not self._play_lock.acquire(timeout=3.0):
-            self._log("上一个声音还在播放，稍后再点")
+            self._post("log", text="上一个声音还在播放，稍后再点")
             return
         self._play_stop = threading.Event()
-        stream = None
         try:
-            idx = self._selected_out()
-            info = (sd.query_devices(idx, "output") if idx is not None
-                    else sd.query_devices(kind="output"))
-            out_sr = int(info["default_samplerate"] or 48000)
-            # 优先使用与设备采样率一致的素材：完全零处理
+            stream, out_sr, channels = self._ensure_out_stream(idx)
             if out_sr == 44100:
                 alt = os.path.join(R.ORIGINAL_AUDIO_44K, os.path.basename(path))
                 if os.path.exists(alt):
                     path = alt
             y, used_gain, limited = R.prepare_playback(path, out_sr, gain)
             if limited:
-                self._log(f"音量自动降到 {used_gain:.2f}（避免削波杂音）")
-            # 双声道设备按双声道输出（避免单声道→立体声转换引入异常），单声道设备才用 1 声道
-            info_full = (sd.query_devices(idx) if idx is not None
-                         else sd.query_devices(kind="output"))
-            channels = 2 if int(info_full.get("max_output_channels", 1)) >= 2 else 1
-            if channels == 2:
-                data = np.repeat(y.reshape(-1, 1), 2, axis=1)
-            else:
-                data = y.reshape(-1, 1)
-            stream = sd.OutputStream(samplerate=out_sr, channels=channels,
-                                     dtype="float32", device=idx, latency="high")
-            self._play_stream = stream
-            stream.start()
-            block = 1024
-            underflows = 0
-            for i in range(0, len(data), block):
-                if self._play_stop.is_set():      # 被新的点击打断
-                    break
-                if stream.write(data[i:i + block]):
-                    underflows += 1
-            if underflows:
-                self._log(f"播放缓冲不足 {underflows} 次（可能有轻微断续）")
+                self._post("log", text=f"音量自动降到 {used_gain:.2f}（避免削波杂音）")
+            self._write_buffer(y, out_sr, channels)
+            self._last_play_end = time.perf_counter()
         finally:
-            if stream is not None:
-                try:
-                    stream.stop()
-                except Exception:  # noqa: BLE001
-                    pass
-                try:
-                    stream.close()
-                except Exception:  # noqa: BLE001
-                    pass
-            self._play_stream = None
-            self._play_lock.release()
+            try:
+                self._play_lock.release()
+            except RuntimeError:
+                pass
 
     def _play_class(self, cls: str):
         """试听：扬声器播放【原始录音】，识别仍用现有模板（稳定 4/4）。"""
-        # 识别喂入现有处理副本（与既有模板匹配，保证演示正确）
-        try:
-            x, sr = R.load_wav(os.path.join(R.BUILTIN_AUDIO, f"{cls}.wav"))
-            if self.worker is not None and self.worker.is_alive():
-                self._demo_q.put((cls, R.to_16k(x, sr)))
-        except Exception as e:  # noqa: BLE001
-            self._log(f"演示音频加载失败：{e}")
-
-        # 播放原始录音（不调音量/不变音色）
-        orig = os.path.join(R.ORIGINAL_AUDIO, f"{cls}.wav")
-        play_path = orig if os.path.exists(orig) else os.path.join(
-            R.BUILTIN_AUDIO, f"{cls}.wav")
+        idx = self._selected_out()          # 在 UI 线程读取设备选择
 
         def run():
             try:
                 self._post("log", text=f"演示：播放原始录音并识别 {R.EVENT_CLASSES[cls]['label']}…")
-                self._play_wav(play_path, gain=R.PLAY_GAIN.get(cls, 1.0))
+                # 识别喂入现有处理副本（与既有模板匹配，保证演示正确）
+                if self.worker is not None and self.worker.is_alive():
+                    try:
+                        x, sr = R.load_wav(os.path.join(R.BUILTIN_AUDIO, f"{cls}.wav"))
+                        # 只保留最新一次演示，避免快速连点造成排队延迟
+                        while True:
+                            try:
+                                self._demo_q.get_nowait()
+                            except queue.Empty:
+                                break
+                        self._demo_q.put((cls, R.to_16k(x, sr)))
+                    except Exception as e:  # noqa: BLE001
+                        self._post("log", text=f"演示音频加载失败：{e}")
+                # 播放原始录音（不调音量/不变音色）
+                orig = os.path.join(R.ORIGINAL_AUDIO, f"{cls}.wav")
+                play_path = orig if os.path.exists(orig) else os.path.join(
+                    R.BUILTIN_AUDIO, f"{cls}.wav")
+                self._play_wav(play_path, gain=R.PLAY_GAIN.get(cls, 1.0), idx=idx)
             except Exception as e:  # noqa: BLE001
                 self._post("log", text=f"播放失败：{e}")
         threading.Thread(target=run, daemon=True).start()
 
     def _play_test_tone(self):
         """播放 1 秒 1kHz 纯音：用于判断扬声器/播放链路是否正常（应听到干净单音）。"""
-        import sounddevice as sd
+        idx = self._selected_out()
 
         def run():
-            stream = None
+            self._play_stop.set()
+            if not self._play_lock.acquire(timeout=3.0):
+                return
+            self._play_stop = threading.Event()
             try:
-                self._play_stop.set()
-                if not self._play_lock.acquire(timeout=3.0):
-                    return
-                self._play_stop = threading.Event()
-                idx = self._selected_out()
-                info = (sd.query_devices(idx, "output") if idx is not None
-                        else sd.query_devices(kind="output"))
-                out_sr = int(info["default_samplerate"] or 48000)
+                stream, out_sr, channels = self._ensure_out_stream(idx)
                 n = int(1.0 * out_sr)
                 t = np.arange(n) / out_sr
                 y = (0.25 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)
                 fade = int(0.02 * out_sr)
                 y[:fade] *= np.linspace(0, 1, fade)
                 y[-fade:] *= np.linspace(1, 0, fade)
-                stream = sd.OutputStream(samplerate=out_sr, channels=1,
-                                         dtype="float32", device=idx, latency="high")
-                self._play_stream = stream
-                stream.start()
-                data = y.reshape(-1, 1)
-                for i in range(0, len(data), 1024):
-                    if self._play_stop.is_set():
-                        break
-                    stream.write(data[i:i + 1024])
+                self._write_buffer(y, out_sr, channels)
             except Exception as e:  # noqa: BLE001
                 self._post("log", text=f"测试音播放失败：{e}")
             finally:
-                if stream is not None:
-                    try:
-                        stream.stop()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    try:
-                        stream.close()
-                    except Exception:  # noqa: BLE001
-                        pass
-                self._play_stream = None
-                self._play_lock.release()
+                try:
+                    self._play_lock.release()
+                except RuntimeError:
+                    pass
+        threading.Thread(target=run, daemon=True).start()
+
+    def _start_preopen(self):
+        """启动后预打开输出流，让第一次试听也不用等设备初始化。"""
+        idx = self._selected_out()
+
+        def run():
+            try:
+                self._ensure_out_stream(idx)
+            except Exception as e:  # noqa: BLE001
+                self._post("log", text=f"预打开播放设备失败：{e}")
         threading.Thread(target=run, daemon=True).start()
 
     def _play_sound(self):
@@ -816,15 +867,14 @@ class App:
         self._play_stop.set()
         try:
             if self.worker is not None and self.worker.is_alive():
-                self.worker.join(timeout=3.0)
+                self.worker.join(timeout=1.5)
         except Exception:  # noqa: BLE001
             pass
         try:
-            if self._play_stream is not None:
-                self._play_stream.stop()
+            self._close_out_stream()
         except Exception:  # noqa: BLE001
             pass
-        time.sleep(0.1)
+        time.sleep(0.05)
         self.root.destroy()
 
 
