@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#EDEFEA">
+<meta name="description" content="局域网内的门铃与环境事件识别控制台">
+<title>环境事件识别台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' fill='%23EDEFEA'/%3E%3Cpath d='M12 4a8 8 0 1 0 8 8' fill='none' stroke='%23141B18' stroke-width='2'/%3E%3Ccircle cx='12' cy='12' r='2.2' fill='%23141B18'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+<a class="skip" href="#main">跳到主内容</a>
+
+<div id="app">
+  <div class="banner" id="offline" role="status" hidden>
+    <span class="banner__dot" aria-hidden="true"></span>
+    <strong>连接已断开，正在重试…</strong>
+    <span class="banner__note" id="offline-note"></span>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <svg class="brand__mark" viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3.6a8.4 8.4 0 1 0 8.4 8.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+        <circle cx="12" cy="12" r="2.1" fill="currentColor"/>
+      </svg>
+      <span class="brand__text">
+        <span class="brand__name">环境事件识别台</span>
+        <span class="brand__sub">局域网控制台</span>
+      </span>
+    </div>
+
+    <div class="net">
+      <button class="addr" id="addr-copy" type="button" title="点击复制局域网地址">
+        <span class="addr__row"><span class="addr__k">局域网</span><span class="addr__v" id="addr-lan">—</span></span>
+        <span class="addr__row"><span class="addr__k">本机</span><span class="addr__v" id="addr-local">—</span></span>
+      </button>
+      <button class="chip" id="iot-chip" type="button" data-open="iot" aria-label="打开上报设置">
+        <span class="dot" id="iot-dot" aria-hidden="true"></span>
+        <span class="chip__k">上报</span>
+        <span class="chip__v" id="iot-value">未配置</span>
+      </button>
+    </div>
+
+    <nav class="tools" aria-label="面板">
+      <button class="tool" type="button" data-open="settings">设置</button>
+      <button class="tool" type="button" data-open="iot">上报</button>
+      <button class="tool" type="button" data-open="records">记录</button>
+    </nav>
+  </header>
+
+  <main class="stage" id="main">
+    <section class="hero" aria-labelledby="state-word">
+      <div class="gauge" id="gauge" data-state="idle">
+        <svg class="gauge__svg" viewBox="0 0 200 200" aria-hidden="true">
+          <g class="gauge__ticks" id="gauge-ticks"></g>
+          <circle class="gauge__face" cx="100" cy="100" r="64"></circle>
+          <path class="gauge__track" d="M 46.26 153.74 A 76 76 0 1 1 153.74 153.74" pathLength="100"></path>
+          <path class="gauge__fill" id="gauge-fill" d="M 46.26 153.74 A 76 76 0 1 1 153.74 153.74" pathLength="100" stroke-dasharray="100" stroke-dashoffset="100"></path>
+          <line class="gauge__floor" id="gauge-floor" x1="100" y1="24" x2="100" y2="36"></line>
+          <circle class="gauge__knob" id="gauge-knob" cx="100" cy="24" r="3.2"></circle>
+          <g class="gauge__scale" id="gauge-scale"></g>
+        </svg>
+        <div class="gauge__center">
+          <span class="gauge__label">当前电平</span>
+          <span class="gauge__db" id="db-value">--</span>
+          <span class="gauge__unit">dB</span>
+        </div>
+        <p class="gauge__caption">
+          <span id="floor-text">底噪 --</span>
+          <span id="env-text"></span>
+        </p>
+      </div>
+
+      <div class="readout">
+        <div class="state-row">
+          <span class="state-dot" id="state-dot" aria-hidden="true"></span>
+          <span class="state-chip" id="state-chip">未就绪</span>
+          <span class="heard" id="heard" hidden>听到声音…</span>
+        </div>
+
+        <h1 class="state-word" id="state-word" aria-live="polite">待机</h1>
+
+        <div class="lines">
+          <p class="subline" id="subline">正在连接…</p>
+          <div class="hit-meta" id="hit-meta" aria-live="polite" hidden>
+          <span class="tier" id="hit-tier">L1</span>
+          <span class="reading"><b id="hit-score">0.00</b><span class="reading__k">得分</span></span>
+          <span class="reading"><b id="hit-latency">0</b><span class="reading__k">毫秒延迟</span></span>
+          <span class="reading"><b id="hit-time">--:--:--</b><span class="reading__k">时刻</span></span>
+            <span class="tag-demo" id="hit-demo" hidden>演示</span>
+          </div>
+        </div>
+
+        <div class="learn" id="learn" hidden>
+          <div class="learn__segments" id="learn-segments" aria-hidden="true"></div>
+          <div class="learn__timer" aria-hidden="true"><span id="learn-bar"></span></div>
+          <button class="btn btn--ghost btn--sm" id="btn-learn-cancel" type="button">取消学习</button>
+        </div>
+
+        <div class="actions" id="actions">
+          <button class="btn btn--primary" id="btn-listen" type="button">开始监听</button>
+          <button class="btn btn--ghost" id="btn-learn" type="button">学习门铃</button>
+        </div>
+
+        <p class="hint" id="learn-hint">本次学习 <b id="hint-takes">3</b> 次，次数越多阈值可能越低。<button class="link" type="button" data-open="settings">打开设置</button></p>
+
+        <div class="previews" role="group" aria-label="试听">
+          <span class="previews__label">试听</span>
+          <button class="chip-btn" type="button" data-preview="doorbell">门铃</button>
+          <button class="chip-btn" type="button" data-preview="knock">敲门</button>
+          <button class="chip-btn" type="button" data-preview="kettle">水壶鸣笛</button>
+          <button class="chip-btn" type="button" data-preview="fire">火警警报</button>
+          <span class="previews__sep" aria-hidden="true"></span>
+          <button class="chip-btn" type="button" data-preview="test">测试音</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="rail" aria-labelledby="rail-title">
+      <header class="rail__head">
+        <h2 class="rail__title" id="rail-title">事件</h2>
+        <span class="rail__count" id="rail-count">最近 40 条</span>
+      </header>
+      <div class="rail__list" id="rail-list"></div>
+      <button class="rail__more" id="rail-more" type="button" hidden>载入更早</button>
+    </aside>
+  </main>
+
+  <footer class="foot">
+    <div class="foot__stats">
+      <span class="foot__stat"><b id="f-templates">0</b><span>模板</span></span>
+      <span class="foot__stat"><b id="f-hit">0</b><span>命中</span></span>
+      <span class="foot__stat"><b id="f-ignore">0</b><span>忽略</span></span>
+    </div>
+    <p class="foot__hint">手机打不开？在 Windows 防火墙里允许本程序。</p>
+  </footer>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+
+<aside class="drawer" id="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title" hidden>
+  <header class="drawer__head">
+    <h2 class="drawer__title" id="drawer-title">设置</h2>
+    <button class="icon-btn" id="drawer-close" type="button" aria-label="关闭">×</button>
+  </header>
+  <div class="drawer__body" id="drawer-body"></div>
+  <footer class="drawer__foot" id="drawer-foot" hidden></footer>
+</aside>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<div class="gate" id="gate" hidden>
+  <form class="gate__card" id="gate-form">
+    <svg class="gate__mark" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3.6a8.4 8.4 0 1 0 8.4 8.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+      <circle cx="12" cy="12" r="2.1" fill="currentColor"/>
+    </svg>
+    <h1>需要访问口令</h1>
+    <p>这台设备开启了访问口令。输入后即可查看。</p>
+    <label class="field">
+      <span class="field__k">口令</span>
+      <input class="input" id="gate-password" type="password" autocomplete="current-password" required>
+    </label>
+    <p class="error" id="gate-error" role="alert" hidden>口令不正确</p>
+    <button class="btn btn--primary" type="submit">进入</button>
+  </form>
+</div>
+
+<script src="./mock.js" defer></script>
+<script src="./app.js" defer></script>
+</body>
+</html>
