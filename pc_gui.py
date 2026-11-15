@@ -690,8 +690,7 @@ class App:
             info = (sd.query_devices(idx, "output") if idx is not None
                     else sd.query_devices(kind="output"))
             out_sr = int(info["default_samplerate"] or 48000)
-            n = int(len(x) * out_sr / sr)
-            y = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x)
+            y = R.resample_audio(x, sr, out_sr)      # FFT 带限重采样，避免高频杂音
             y = np.clip(y * gain, -1, 1).astype(np.float32).reshape(-1, 1)
             stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32",
                                      device=idx)

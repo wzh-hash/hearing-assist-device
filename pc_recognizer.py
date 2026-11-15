@@ -283,6 +283,26 @@ def frame_db(x: np.ndarray, win: int = WIN, hop: int = HOP) -> np.ndarray:
     return 10 * np.log10(np.mean(frames ** 2, axis=1) + 1e-10)
 
 
+def resample_audio(x: np.ndarray, sr: int, out_sr: int) -> np.ndarray:
+    """FFT 带限重采样（替代线性插值，避免升采样时的高频“成像”杂音）。"""
+    x = np.asarray(x, dtype=np.float32)
+    if sr == out_sr or len(x) == 0:
+        return x
+    n_in = len(x)
+    n_out = int(round(n_in * out_sr / sr))
+    if n_out < 2:
+        return x
+    X = np.fft.rfft(x)
+    fin = np.fft.rfftfreq(n_in, 1.0 / sr)
+    fout = np.fft.rfftfreq(n_out, 1.0 / out_sr)
+    Y = np.zeros(len(fout), dtype=complex)
+    valid = fout <= min(sr, out_sr) / 2.0
+    Y[valid] = (np.interp(fout[valid], fin, X.real)
+                + 1j * np.interp(fout[valid], fin, X.imag))
+    y = np.fft.irfft(Y, n=n_out)
+    return (y * (n_out / n_in)).astype(np.float32)
+
+
 def trim_active(x: np.ndarray, rel_db: float = 25.0, margin: float = 0.05,
                 min_dur: float = 0.6) -> np.ndarray:
     """按能量裁掉首尾静音；至少保留 min_dur 秒，避免把声音裁没。"""
