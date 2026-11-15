@@ -485,6 +485,24 @@ ORIGINAL_AUDIO = os.path.join(SOUND_DIR, "original")   # 原始录音 48k（试�
 ORIGINAL_AUDIO_44K = os.path.join(SOUND_DIR, "original_44k")  # 44.1k 设备备用
 # 播放音量平衡（只调音量，不改音色/内容）；原始录音电平差异较大
 PLAY_GAIN = {"doorbell": 1.6, "knock": 4.0, "kettle": 10.0, "fire": 0.5}
+PLAY_PEAK_MAX = 0.85      # 播放峰值上限：超过会被硬削波产生杂音
+
+
+def prepare_playback(path: str, out_sr: int, gain: float = 1.0):
+    """读取并准备播放数据：必要时重采样，并自动限制增益避免削波。
+
+    返回 (float32 波形, 实际使用的增益, 是否降低过增益)。
+    """
+    x, sr = load_wav(path)
+    if sr != out_sr:
+        x = resample_audio(x, sr, out_sr)
+    x = x.astype(np.float32)
+    peak = float(np.max(np.abs(x))) if len(x) else 0.0
+    used = float(gain)
+    if peak > 1e-6 and peak * used > PLAY_PEAK_MAX:
+        used = PLAY_PEAK_MAX / peak
+    y = np.clip(x * used, -1.0, 1.0).astype(np.float32)
+    return y, used, used < gain
 EVENT_CLASSES = {
     "doorbell": {"label": "门铃", "tier": "L1"},
     "knock":    {"label": "敲门", "tier": "L1"},

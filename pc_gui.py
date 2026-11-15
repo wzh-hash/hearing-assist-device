@@ -696,21 +696,30 @@ class App:
                 alt = os.path.join(R.ORIGINAL_AUDIO_44K, os.path.basename(path))
                 if os.path.exists(alt):
                     path = alt
-            x, sr = R.load_wav(path)
-            if sr == out_sr:
-                y = x.astype(np.float32)
+            y, used_gain, limited = R.prepare_playback(path, out_sr, gain)
+            if limited:
+                self._log(f"音量自动降到 {used_gain:.2f}（避免削波杂音）")
+            # 双声道设备按双声道输出（避免单声道→立体声转换引入异常），单声道设备才用 1 声道
+            info_full = (sd.query_devices(idx) if idx is not None
+                         else sd.query_devices(kind="output"))
+            channels = 2 if int(info_full.get("max_output_channels", 1)) >= 2 else 1
+            if channels == 2:
+                data = np.repeat(y.reshape(-1, 1), 2, axis=1)
             else:
-                y = R.resample_audio(x, sr, out_sr)
-            y = np.clip(y * gain, -1, 1).astype(np.float32).reshape(-1, 1)
-            stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32",
-                                     device=idx)
+                data = y.reshape(-1, 1)
+            stream = sd.OutputStream(samplerate=out_sr, channels=channels,
+                                     dtype="float32", device=idx, latency="high")
             self._play_stream = stream
             stream.start()
-            block = 4096
-            for i in range(0, len(y), block):
+            block = 1024
+            underflows = 0
+            for i in range(0, len(data), block):
                 if self._play_stop.is_set():      # 被新的点击打断
                     break
-                stream.write(y[i:i + block])
+                if stream.write(data[i:i + block]):
+                    underflows += 1
+            if underflows:
+                self._log(f"播放缓冲不足 {underflows} 次（可能有轻微断续）")
         finally:
             if stream is not None:
                 try:
@@ -769,14 +778,14 @@ class App:
                 y[:fade] *= np.linspace(0, 1, fade)
                 y[-fade:] *= np.linspace(1, 0, fade)
                 stream = sd.OutputStream(samplerate=out_sr, channels=1,
-                                         dtype="float32", device=idx)
+                                         dtype="float32", device=idx, latency="high")
                 self._play_stream = stream
                 stream.start()
                 data = y.reshape(-1, 1)
-                for i in range(0, len(data), 4096):
+                for i in range(0, len(data), 1024):
                     if self._play_stop.is_set():
                         break
-                    stream.write(data[i:i + 4096])
+                    stream.write(data[i:i + 1024])
             except Exception as e:  # noqa: BLE001
                 self._post("log", text=f"测试音播放失败：{e}")
             finally:
