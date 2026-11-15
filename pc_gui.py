@@ -163,6 +163,8 @@ class App:
             tk.Button(demo, text=f"▶ {info['label']}", relief="flat", bg="#f0e9dd", fg=C_TEXT,
                       font=(FONT, 9),
                       command=lambda c=cls: self._play_class(c)).pack(side="left", padx=3)
+        tk.Button(demo, text="🔊 测试音", command=self._play_test_tone, relief="flat",
+                  bg="#e6ebf0", fg=C_TEXT, font=(FONT, 9)).pack(side="left", padx=(12, 3))
 
         # ---- 高级设置（可折叠） ----
         self.adv_head = tk.Frame(self.root, bg=C_BG)
@@ -686,11 +688,19 @@ class App:
         stream = None
         try:
             idx = self._selected_out()
-            x, sr = R.load_wav(path)
             info = (sd.query_devices(idx, "output") if idx is not None
                     else sd.query_devices(kind="output"))
             out_sr = int(info["default_samplerate"] or 48000)
-            y = R.resample_audio(x, sr, out_sr)      # FFT 带限重采样，避免高频杂音
+            # 优先使用与设备采样率一致的素材：完全零处理
+            if out_sr == 44100:
+                alt = os.path.join(R.ORIGINAL_AUDIO_44K, os.path.basename(path))
+                if os.path.exists(alt):
+                    path = alt
+            x, sr = R.load_wav(path)
+            if sr == out_sr:
+                y = x.astype(np.float32)
+            else:
+                y = R.resample_audio(x, sr, out_sr)
             y = np.clip(y * gain, -1, 1).astype(np.float32).reshape(-1, 1)
             stream = sd.OutputStream(samplerate=out_sr, channels=1, dtype="float32",
                                      device=idx)
@@ -732,9 +742,55 @@ class App:
         def run():
             try:
                 self._post("log", text=f"演示：播放原始录音并识别 {R.EVENT_CLASSES[cls]['label']}…")
-                self._play_wav(play_path)
+                self._play_wav(play_path, gain=R.PLAY_GAIN.get(cls, 1.0))
             except Exception as e:  # noqa: BLE001
                 self._post("log", text=f"播放失败：{e}")
+        threading.Thread(target=run, daemon=True).start()
+
+    def _play_test_tone(self):
+        """播放 1 秒 1kHz 纯音：用于判断扬声器/播放链路是否正常（应听到干净单音）。"""
+        import sounddevice as sd
+
+        def run():
+            stream = None
+            try:
+                self._play_stop.set()
+                if not self._play_lock.acquire(timeout=3.0):
+                    return
+                self._play_stop = threading.Event()
+                idx = self._selected_out()
+                info = (sd.query_devices(idx, "output") if idx is not None
+                        else sd.query_devices(kind="output"))
+                out_sr = int(info["default_samplerate"] or 48000)
+                n = int(1.0 * out_sr)
+                t = np.arange(n) / out_sr
+                y = (0.25 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32)
+                fade = int(0.02 * out_sr)
+                y[:fade] *= np.linspace(0, 1, fade)
+                y[-fade:] *= np.linspace(1, 0, fade)
+                stream = sd.OutputStream(samplerate=out_sr, channels=1,
+                                         dtype="float32", device=idx)
+                self._play_stream = stream
+                stream.start()
+                data = y.reshape(-1, 1)
+                for i in range(0, len(data), 4096):
+                    if self._play_stop.is_set():
+                        break
+                    stream.write(data[i:i + 4096])
+            except Exception as e:  # noqa: BLE001
+                self._post("log", text=f"测试音播放失败：{e}")
+            finally:
+                if stream is not None:
+                    try:
+                        stream.stop()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    try:
+                        stream.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                self._play_stream = None
+                self._play_lock.release()
         threading.Thread(target=run, daemon=True).start()
 
     def _play_sound(self):

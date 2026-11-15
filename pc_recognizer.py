@@ -284,7 +284,10 @@ def frame_db(x: np.ndarray, win: int = WIN, hop: int = HOP) -> np.ndarray:
 
 
 def resample_audio(x: np.ndarray, sr: int, out_sr: int) -> np.ndarray:
-    """FFT 带限重采样（替代线性插值，避免升采样时的高频“成像”杂音）。"""
+    """FFT 带限重采样（频谱零填充/截断，不插值，避免相位/梳状失真）。
+
+    输入输出频谱的 bin 间隔天然相同，所以只需复制低频频谱、按比例缩放。
+    """
     x = np.asarray(x, dtype=np.float32)
     if sr == out_sr or len(x) == 0:
         return x
@@ -293,12 +296,10 @@ def resample_audio(x: np.ndarray, sr: int, out_sr: int) -> np.ndarray:
     if n_out < 2:
         return x
     X = np.fft.rfft(x)
-    fin = np.fft.rfftfreq(n_in, 1.0 / sr)
-    fout = np.fft.rfftfreq(n_out, 1.0 / out_sr)
-    Y = np.zeros(len(fout), dtype=complex)
-    valid = fout <= min(sr, out_sr) / 2.0
-    Y[valid] = (np.interp(fout[valid], fin, X.real)
-                + 1j * np.interp(fout[valid], fin, X.imag))
+    n_bins = n_out // 2 + 1
+    Y = np.zeros(n_bins, dtype=complex)
+    k = min(len(X), n_bins)
+    Y[:k] = X[:k]
     y = np.fft.irfft(Y, n=n_out)
     return (y * (n_out / n_in)).astype(np.float32)
 
@@ -480,7 +481,10 @@ def analyze(x: np.ndarray, templates: list[Template]) -> tuple[float, str]:
 BUILTIN_AUDIO = os.path.join(SOUND_DIR, "builtin_audio")
 BUILTIN_TPL = os.path.join(SOUND_DIR, "builtin_tpl")
 CALIB_TPL = os.path.join(SOUND_DIR, "calib_tpl")
-ORIGINAL_AUDIO = os.path.join(SOUND_DIR, "original")   # 原始录音（试听播放用，不做任何处理）
+ORIGINAL_AUDIO = os.path.join(SOUND_DIR, "original")   # 原始录音 48k（试听播放用，零处理）
+ORIGINAL_AUDIO_44K = os.path.join(SOUND_DIR, "original_44k")  # 44.1k 设备备用
+# 播放音量平衡（只调音量，不改音色/内容）；原始录音电平差异较大
+PLAY_GAIN = {"doorbell": 1.6, "knock": 4.0, "kettle": 10.0, "fire": 0.5}
 EVENT_CLASSES = {
     "doorbell": {"label": "门铃", "tier": "L1"},
     "knock":    {"label": "敲门", "tier": "L1"},
