@@ -11,6 +11,8 @@ sounds/room_ref*.wav
 sounds/config.json
 # 物联网凭证（Iot_id / Iot_pwd），绝不入库
 sounds/iot.json
+# 板子凭证与 WiFi 密码（由 board/config.example.py 复制填写）
+board/config.py
 sounds/session_log.csv
 sounds/events/
 sounds/builtin_raw/

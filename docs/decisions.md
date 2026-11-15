@@ -26,6 +26,7 @@
 | D-17 | 多端并发 | 服务端单一状态机 + 所有命令幂等；冲突返回 409 + 中文原因；学习互斥、试听互斥；不区分操作者身份 | 页面只是视图；没有账号体系（REQ-02 §9 排除） |
 | D-18 | 录音留存 | 保留全部判定录音（含忽略），300 个上限；页面单条播放/下载；新增「清空录音」；**不做** zip 打包 | AC-WEB-5 的误报复盘靠它；`sounds/events/` 已被 `.gitignore:13` 忽略；打包导出体积/隐私都不划算 |
 | D-19 | 阈值默认值 | 未学习时 **0.60**（`DEFAULT_THRESHOLD`），学习后由 `sounds/config.json` 覆盖（落在 0.50–0.62） | v1.0 §5.2 写的 0.50 与代码不符，属笔误 |
+| D-20 | 板子声音怎么实现 | MicroPython 层**没有音调 API**，四种提示音改为 4 个预置 WAV（`board/sounds/`，由 `tools/make_board_sounds.py` 生成），用 `speaker.play_sys_music()` 回放；真机不支持时声音降级为静默，屏与灯仍满足"可区分" | 官方 K10 MicroPython 文档只有 `play_sys_music` / `play_tf_music`；Arduino 模式的 `playTone` 不能用于此固件 |
 
 ## 二、支撑性技术事实（非决策，但正文依赖）
 
@@ -39,7 +40,12 @@
 | 录音命名 `{时间}_{hit\|ignore}_{cls\|none}_s{score:.2f}_c{conf:.2f}.wav`，保留 300 个 | `pc_recognizer.py:874-884` |
 | CLI：`devices` / `learn` / `listen` / `selftest` / `calibrate` / `record-ref --takes` | `run.bat:20-29`、`README.md:154-160` |
 | 平台：`iot.dfrobot.com.cn:1883` 明文；`Iot_id`/`Iot_pwd` 认证；主题为工作间创建设备后分配的随机编码；约 1 万条/账号、建议间隔 ≥3 秒、约 10 个设备；TLS/8883 未证实 | DFRobot 官方/社区文档（见 `docs/plan.md` 附录来源） |
-| K10：`MqttClient.connect(server, port=1883, ...)`，无 qos/retain 参数，clientId 例程留空；MicroPython 库官方标注"测试阶段" | unihiker 官方 wiki |
+| K10：`MqttClient.connect(server=…, port=…, client_id=…, user=…, psd=…)`，无 qos/retain 参数，clientId 例程留空；MicroPython 库官方标注"测试阶段" | unihiker 官方 wiki |
+| K10 的 WiFi 与 MQTT 都在 **`k10_base`**（不是 `unihiker_k10`）；WiFi 密码参数名是 **`psd`** | https://www.unihiker.com/wiki/K10/Examples/examples_mpy/ |
+| K10 的 MQTT 回调**无参数**，payload 要在回调里用 `message(topic=…)` 再取；文档里没有 `loop()` / `check_msg()` | 同上 |
+| K10 的屏与灯在 `unihiker_k10`：`screen.init(dir=2)`、`draw_text(text=,x=,y=,font_size=,color=)`、`show_draw()` 才上屏；`rgb.write(num=,color=0xRRGGBB)`、`rgb.brightness(9)`；颜色是 `0xRRGGBB` 整数 | https://www.unihiker.com.cn/wiki/k10/micropython_unihiker_k10 |
+| K10 的 MicroPython **没有音调/音量 API**，只有 `speaker.play_sys_music(文件名)` 回放 WAV | 同上、以及 https://mc.dfrobot.com.cn/article-385494.html |
+| K10 中文显示依赖固件字体，社区反馈默认支持差，可能需要自建 LVGL 字库 | https://mc.dfrobot.com.cn/thread-323513-1-1.html |
 
 ## 三、仍待确认 / 待实测
 

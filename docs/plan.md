@@ -139,6 +139,9 @@ run_gui_classic.bat       新增，启动 pc_gui.py（回退）
 | R-6 | 播放与识别**不互斥**是现存缺陷 | 一次播放报两次，直接挂 AC-WEB-9 / AC-IOT-6 | T4 必须做抑制窗口，不能只做播放 |
 | R-7 | 系统 python 3.14 缺 sounddevice、`lib/` 是 cp312 | 换机器即崩 | 启动器三级回退 + README 写明"连 lib/ 一起拷" |
 | R-8 | Windows 防火墙首次弹窗 | 手机打不开，现场尴尬 | 演示前一天先跑一次点"允许"；页面给排查提示 |
+| R-9 | K10 的 MicroPython **没有音调 API**，声音只能播预置 WAV | IOT-6.1–6.4 的四种提示音 | 已生成 `board/sounds/*.wav`（D-20）；真机回放不可用则声音降级，屏+灯兜底 |
+| R-10 | `MqttClient()` 无参构造、回调由库线程派发这两点**未证实** | 固件能否收到消息 | 上板第一件事：用 `sim_board.py send` 发一条，看屏幕是否触发；不触发则改用手动轮询 `message()` |
+| R-11 | K10 中文显示依赖固件字体，可能需自建 LVGL 字库 | IOT-6.13 | `board/config.py` 里 `SHOW_CHINESE=False` 可退化短码，先保证可读 |
 
 ---
 
