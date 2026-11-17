@@ -414,7 +414,7 @@ class Hub:
             self.cooldown_until = now_ms() + COOLDOWN_MS
             self._push_event(event)
 
-            prefix = "演示命中" if demo else "命中"
+            prefix = "试听命中" if demo else "命中"
             self.log(f"{prefix}：{event['label']}，得分 {event['score']:.2f}")
 
     def start_learning(self, takes) -> None:
@@ -1132,7 +1132,7 @@ class Handler(BaseHTTPRequestHandler):
     # -- CSV ----------------------------------------------------------------
 
     def send_export(self) -> None:
-        header = ["时间", "类型", "类别", "tier", "是否演示", "得分", "置信度",
+        header = ["时间", "类型", "类别", "tier", "是否试听", "得分", "置信度",
                   "延迟ms", "时长s", "调性", "调制", "衰减", "稳定度", "主频比"]
         buffer = io.StringIO()
         writer = csv.writer(buffer, lineterminator="\r\n")

@@ -54,7 +54,7 @@ def _clip_db(db: float, lo: float = -70.0, hi: float = -10.0) -> float:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("环境事件识别 · 演示控制台")
+        self.root.title("环境事件识别 · 控制台")
         self.root.geometry("720x680")
         self.root.configure(bg=C_BG)
         self.root.minsize(680, 600)
@@ -108,7 +108,7 @@ class App:
                  font=(FONT, 16, "bold")).pack(side="left")
         tk.Label(header, text="听障人士环境事件感知 · Demo", bg=C_BG, fg=C_SUB,
                  font=(FONT, 9)).pack(side="left", padx=10, pady=4)
-        self.btn_panel = tk.Button(header, text="📊 演示数据", command=self._open_panel,
+        self.btn_panel = tk.Button(header, text="📊 数据面板", command=self._open_panel,
                                    bg="#e6ebf0", fg=C_TEXT, relief="flat",
                                    font=(FONT, 9), padx=10)
         self.btn_panel.pack(side="right")
@@ -160,7 +160,7 @@ class App:
                                     activebackground="#248a4c", activeforeground="white")
         self.btn_toggle.pack(side="left", fill="x", expand=True)
 
-        # ---- 试听（演示用，四类事件） ----
+        # ---- 试听（四类事件） ----
         demo = tk.Frame(self.root, bg=C_BG)
         demo.pack(fill="x", padx=14, pady=(0, 6))
         tk.Label(demo, text="试听：", bg=C_BG, fg=C_SUB, font=(FONT, 9)).pack(side="left")
@@ -469,10 +469,10 @@ class App:
         self._log("停止监听")
 
     def _run_demo(self, det, demo):
-        """演示回放：把内置音频按实时节奏送进检测器（不经麦克风，保证演示可见）。"""
+        """试听回放：把内置音频按实时节奏送进检测器（不经麦克风，保证试听可见）。"""
         cls, x = demo
         det.reset()
-        det.strict = False          # 演示回放用干净音频，走非严格管线
+        det.strict = False          # 试听回放用干净音频，走非严格管线
         try:
             self._feed_demo(det, x)
         finally:
@@ -499,7 +499,7 @@ class App:
                     self._post("event", ev=ev)
             time.sleep(R.BLOCK_SEC)
         if not got:
-            self._post("log", text="演示回放未命中（请重试）")
+            self._post("log", text="试听回放未命中（请重试）")
 
     def _listen_worker(self, threshold: float, gate: float, device):
         rec = None
@@ -639,7 +639,7 @@ class App:
             self.lbl_detail.configure(
                 text=f"{tier}　得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　"
                      f"{self.last_hit_at}")
-            self._log(f"{'演示命中' if ev.get('demo') else '命中'} {label}（{tier}） "
+            self._log(f"{'试听命中' if ev.get('demo') else '命中'} {label}（{tier}） "
                       f"conf={ev.get('conf', 0):.2f} "
                       f"score={ev['score']:.3f}  "
                       f"敲击={ev.get('n_knock', 0)} 脉冲={ev.get('n_pulse', 0)} "
@@ -681,7 +681,7 @@ class App:
             self.panel.lift()
             return
         self.panel = pc_dash.DataPanel(self.root, self)
-        self._log("已打开演示数据面板")
+        self._log("已打开数据面板")
 
     def _flash(self, tier: str = "L1"):
         bg = {"L3": "#ffc9b8", "L2": "#ffe9c4"}.get(tier, "#ffe3d6")
@@ -794,12 +794,12 @@ class App:
 
         def run():
             try:
-                self._post("log", text=f"演示：播放原始录音并识别 {R.EVENT_CLASSES[cls]['label']}…")
-                # 识别喂入现有处理副本（与既有模板匹配，保证演示正确）
+                self._post("log", text=f"试听：播放原始录音并识别 {R.EVENT_CLASSES[cls]['label']}…")
+                # 识别喂入现有处理副本（与既有模板匹配，保证试听正确）
                 if self.worker is not None and self.worker.is_alive():
                     try:
                         x, sr = R.load_wav(os.path.join(R.BUILTIN_AUDIO, f"{cls}.wav"))
-                        # 只保留最新一次演示，避免快速连点造成排队延迟
+                        # 只保留最新一次试听，避免快速连点造成排队延迟
                         while True:
                             try:
                                 self._demo_q.get_nowait()
@@ -807,7 +807,7 @@ class App:
                                 break
                         self._demo_q.put((cls, R.to_16k(x, sr)))
                     except Exception as e:  # noqa: BLE001
-                        self._post("log", text=f"演示音频加载失败：{e}")
+                        self._post("log", text=f"试听音频加载失败：{e}")
                 # 播放原始录音（不调音量/不变音色）
                 orig = os.path.join(R.ORIGINAL_AUDIO, f"{cls}.wav")
                 play_path = orig if os.path.exists(orig) else os.path.join(

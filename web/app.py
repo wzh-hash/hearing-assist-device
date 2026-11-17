@@ -202,7 +202,7 @@ class App:
 
     def refresh_templates(self, *, initial: bool = False) -> None:
         learned = sorted(glob.glob(os.path.join(R.SOUND_DIR, "learned_*.wav")))
-        # 只演示实际门铃的那一个模板：有学习结果就不再叠加内置四类参考。
+        # 试听只加载实际门铃那一个模板：有学习结果就不再叠加内置四类参考。
         refs = learned if learned else R.learned_refs()
         templates: list = []
         try:
@@ -273,7 +273,7 @@ class App:
             self._ticker_stop.wait(0.125)
 
     def _follow_demo_display(self) -> None:
-        """试听演示的大字跟随音频的真实有声区间，不在静音尾/间隙里硬撑。"""
+        """试听的大字跟随音频的真实有声区间，不在静音尾/间隙里硬撑。"""
         playing = self.bus.playing
         if not playing or playing.get("test"):
             return
@@ -449,7 +449,7 @@ class App:
                     continue
                 if time.time() < self._suppress_until:
                     if not suppressed:
-                        # 播放期间丢弃麦克风块；与桌面版一致，演示前清掉未完成的采集。
+                        # 播放期间丢弃麦克风块；与桌面版一致，试听前清掉未完成的采集。
                         detector.reset()
                         suppressed = True
                     self.bus.set_level(self._block_db(block), detector.floor)
@@ -616,7 +616,7 @@ class App:
         except Exception:  # noqa: BLE001
             pass
 
-        prefix = "演示命中" if demo else ("命中" if entry_type == "hit" else "忽略")
+        prefix = "试听命中" if demo else ("命中" if entry_type == "hit" else "忽略")
         self.log(
             f"{prefix}：{label or '未知'}（{tier}）得分 {score:.2f} "
             f"延迟 {int(round(float(event.get('latency') or 0.0) * 1000))} ms"
@@ -1028,12 +1028,12 @@ class App:
             event["cls"] = cls
             event["label"] = info["label"]
             event["tier"] = info["tier"]
-            # 演示是离线跑完整段音频，用固定值给页面一个可读的“延迟”。
+            # 试听是离线跑完整段音频，用固定值给页面一个可读的“延迟”。
             event["latency"] = 0.35
             self._record_event(event, detector, demo=True)
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
-            self.log(f"演示命中生成失败：{exc}")
+            self.log(f"试听命中生成失败：{exc}")
 
     def _resolve_template_file(self, file: str) -> str | None:
         name = os.path.basename(str(file or ""))

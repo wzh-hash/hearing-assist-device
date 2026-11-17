@@ -441,7 +441,7 @@ def threshold_from_templates(templates: list[Template]) -> float | None:
 
 
 def template_scores(x: np.ndarray, templates: list[Template]) -> list[tuple[str, float]]:
-    """返回每个模板的得分（用于演示面板的可视化）。"""
+    """返回每个模板的得分（用于数据面板的可视化）。"""
     if len(x) < int(0.25 * SR):
         return [(os.path.basename(t.path), 0.0) for t in templates]
     q = feat(x)
@@ -1695,7 +1695,7 @@ def main():
                                      "listen", "play", "e2e"])
     ap.add_argument("--ref", nargs="+", default=None,
                     help="参考音频或目录（默认：有 learned_*/room_ref* 就用它们，否则用 ./sounds）")
-    ap.add_argument("--sound", default=SOUND_FILE, help="播放/演示用的门铃音频")
+    ap.add_argument("--sound", default=SOUND_FILE, help="播放/试听用的门铃音频")
     ap.add_argument("--device", type=int, default=None, help="输入设备序号（见 devices）")
     ap.add_argument("--out-dev", type=int, default=None, help="播放设备序号")
     ap.add_argument("--threshold", type=float, default=None,

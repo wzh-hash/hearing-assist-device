@@ -15,7 +15,7 @@
     ● CLOUD                 15:42:03
                   DOOR
                  [ L2 ]
-                                    DEMO
+                                    TEST
 
 字体：`font_msg48.bin`（Arial Bold 48，消息）/ `font_meta18.bin`（Arial 18，状态）。
 字库只含 ASCII，用 LVGL 从内存加载（buffer 保活）；缺字库回退内置字体，
@@ -241,7 +241,7 @@ class K10Ui:
             self._set_color(self._msg, color)
             self._set_text(self._tier, tier)
             self._badge(self._tier, color)
-            self._set_text(self._demo, "DEMO" if with_demo else "")
+            self._set_text(self._demo, "TEST" if with_demo else "")
             self._set_text(self._time, _hms(event.get("ts"), self._tz))
             self._set_status(True)
         else:
@@ -371,7 +371,7 @@ class K10Ui:
         self._canvas_text(_hms(event.get("ts"), self._tz), 10, 180, 16, META)
         self._canvas_text("CLOUD", 10, 30, 16, META)
         if demo:
-            self._canvas_text("DEMO", 10, 210, 16, META_DIM)
+            self._canvas_text("TEST", 10, 210, 16, META_DIM)
         self._canvas_flush()
 
     def _canvas_text(self, text, x, y, size, color):

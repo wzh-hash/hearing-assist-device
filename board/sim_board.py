@@ -47,7 +47,7 @@ class ConsoleUi:
     def show(self, event):
         stamp = time.strftime("%H:%M:%S")
         cls = event.get("cls", "")
-        mark = "（演示）" if event.get("demo") else ""
+        mark = "（试听）" if event.get("demo") else ""
         detail = ""
         if isinstance(event.get("score"), (int, float)):
             detail += " 得分 %.2f" % float(event["score"])
@@ -221,7 +221,7 @@ def build_parser():
     send.add_argument("--same-ts", action="store_true", default=True, help="重复发送时复用同一 ts（测去重）")
     send.add_argument("--new-ts", dest="same_ts", action="store_false", help="重复发送时递增 ts（测重触发）")
     send.add_argument("--short", action="store_true", help="发短码而不是 JSON")
-    send.add_argument("--demo", action="store_true", help="标记为演示命中")
+    send.add_argument("--demo", action="store_true", help="标记为试听命中")
     send.set_defaults(func=cmd_send)
 
     return parser

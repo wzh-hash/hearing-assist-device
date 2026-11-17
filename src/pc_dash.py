@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-演示数据面板（给老师 / 评委看的数据与可视化）
+数据面板（给老师 / 评委看的数据与可视化）
 
 内容：
     - 会话统计：模板数、阈值、命中/忽略次数、平均延迟、最高得分
@@ -53,7 +53,7 @@ class DataPanel(tk.Toplevel):
     def __init__(self, master, app):
         super().__init__(master)
         self.app = app
-        self.title("演示数据面板")
+        self.title("数据面板")
         self.geometry("1020x760")
         self.configure(bg=BG)
         self._shown = 0
@@ -65,7 +65,7 @@ class DataPanel(tk.Toplevel):
     def _build(self):
         pad = dict(padx=12, pady=6)
 
-        tk.Label(self, text="演示数据 · 门铃识别", bg=BG, fg=TEXT,
+        tk.Label(self, text="数据面板 · 门铃识别", bg=BG, fg=TEXT,
                  font=("Microsoft YaHei UI", 14, "bold")).pack(anchor="w", **pad)
 
         # 统计条

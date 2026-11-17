@@ -427,7 +427,7 @@ class StateBus:
     # ------------------------------------------------------------------
 
     def csv_bytes(self) -> bytes:
-        header = ["时间", "类型", "类别", "tier", "是否演示", "得分", "置信度",
+        header = ["时间", "类型", "类别", "tier", "是否试听", "得分", "置信度",
                   "延迟ms", "时长s", "调性", "调制", "衰减", "稳定度", "主频比"]
         buffer = io.StringIO()
         writer = csv.writer(buffer, lineterminator="\r\n")

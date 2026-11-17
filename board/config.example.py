@@ -8,7 +8,7 @@
 """
 
 # ---------- 现场 WiFi ----------
-WIFI_SSID = "替换成演示现场 WiFi"
+WIFI_SSID = "替换成安装现场 WiFi"
 WIFI_PASSWORD = "替换成 WiFi 密码"
 WIFI_TIMEOUT_MS = 50000
 
