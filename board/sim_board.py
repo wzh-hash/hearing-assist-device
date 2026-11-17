@@ -44,10 +44,19 @@ class ConsoleUi:
     def __init__(self) -> None:
         self._last = ""
 
-    def show(self, cls, tier, demo):
+    def show(self, event):
         stamp = time.strftime("%H:%M:%S")
-        mark = "（演示）" if demo else ""
-        line = f"[{stamp}] 板子动作{mark}：{ACTIONS.get(cls, cls)}  [{tier}]"
+        cls = event.get("cls", "")
+        mark = "（演示）" if event.get("demo") else ""
+        detail = ""
+        if isinstance(event.get("score"), (int, float)):
+            detail += " 得分 %.2f" % float(event["score"])
+        if isinstance(event.get("latency"), (int, float)):
+            detail += " 延迟 %.2fs" % float(event["latency"])
+        line = (
+            f"[{stamp}] 板子动作{mark}：{ACTIONS.get(cls, cls)}"
+            f"  [{event.get('tier', 'L2')}]{detail}"
+        )
         print(line)
         self._last = line
 

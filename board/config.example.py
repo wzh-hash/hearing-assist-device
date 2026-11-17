@@ -28,3 +28,16 @@ HEARTBEAT_MS = 30000
 # ---------- 显示 ----------
 # 中文是否可用取决于固件字体（R-2）；显示异常时改成 False，退化为 DOOR / KNOCK / ...
 SHOW_CHINESE = True
+# 事件时间按这个时区显示（不依赖板子 RTC，用时间戳直接换算）
+TZ_OFFSET_HOURS = 8
+
+# ---------- 外接提醒 ----------
+# K10 板载没有蜂鸣器、也没有震动马达，需要外接；不接就保持 None。
+# IO 限制（官方文档）：只有 P0 / P1 是原生 GPIO 且支持 PWM；其余引脚只能拉高/拉低。
+#   有源蜂鸣器 → 任意数字口；无源蜂鸣器 → 只能 P0 或 P1（靠 write_analog 出音调）
+#   震动马达 → 必须经三极管/MOSFET 模块驱动，不能直接接 GPIO
+BUZZER_PIN = None
+BUZZER_MODE = "active"        # "active" 有源（高低电平） / "passive" 无源（PWM 音调）
+VIBRATION_PIN = None
+BUZZER_ACTIVE_HIGH = True     # 模块是低电平触发就改 False
+VIBRATION_ACTIVE_HIGH = True

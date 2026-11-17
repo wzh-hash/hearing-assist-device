@@ -57,6 +57,7 @@ web/static/style.css      大字区 / 事件流 / 响应式
 board/main.py             K10 入口：连 WiFi + 订阅 + 主循环
 board/mqtt_link.py        连接/载荷/心跳（与板子无关，可复用）
 board/ui_k10.py           屏 / 喇叭 / 3 颗 WS2812
+board/feedback.py         外接蜂鸣器 / 震动马达的节奏（可选）
 board/sim_board.py        本机模拟板子（第二订阅者，验收 AC-IOT-7）
 run_gui.bat               改为启动 pc_web.py
 run_gui_classic.bat       新增，启动 pc_gui.py（回退）
@@ -144,6 +145,7 @@ run_gui_classic.bat       新增，启动 pc_gui.py（回退）
 | R-9 | K10 的 MicroPython **没有音调 API**，声音只能播预置 WAV | IOT-6.1–6.4 的四种提示音 | 已生成 `board/sounds/*.wav`（D-20）；真机回放不可用则声音降级，屏+灯兜底 |
 | R-10 | `MqttClient()` 无参构造、回调由库线程派发这两点**未证实** | 固件能否收到消息 | 上板第一件事：用 `sim_board.py send` 发一条，看屏幕是否触发；不触发则改用手动轮询 `message()` |
 | R-11 | K10 中文显示依赖固件字体，可能需自建 LVGL 字库 | IOT-6.13 | `board/config.py` 里 `SHOW_CHINESE=False` 可退化短码，先保证可读 |
+| R-12 | K10 板载无蜂鸣器/震动马达，外接模块的电平与供电未实测 | D-21 的可选增强 | 接线见 `docs/board-wiring.md`；先 REPL 验引脚，再发事件验节奏 |
 
 ---
 

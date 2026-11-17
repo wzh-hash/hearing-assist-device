@@ -225,7 +225,7 @@ class BoardLink:
             if not self._accept(event, self._clock()):
                 return
             self.last_event = event
-            self._ui.show(event["cls"], event["tier"], event["demo"])
+            self._ui.show(event)
             self._log("触发 %s%s" % (event["cls"], "（演示）" if event["demo"] else ""))
         except Exception as exc:
             self._log("处理消息异常：%s" % exc)

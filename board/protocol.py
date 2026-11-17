@@ -69,11 +69,19 @@ def _from_obj(obj):
     ts = obj.get("ts")
     if isinstance(ts, bool) or not isinstance(ts, (int, float)):
         ts = None
+    score = obj.get("score")
+    if isinstance(score, bool) or not isinstance(score, (int, float)):
+        score = None
+    latency = obj.get("latency")
+    if isinstance(latency, bool) or not isinstance(latency, (int, float)):
+        latency = None
     return {
         "cls": cls,
         "tier": tier,
         "demo": bool(obj.get("demo", False)),
         "ts": ts,
+        "score": score,
+        "latency": latency,
         "short": False,
     }
 
@@ -92,7 +100,8 @@ def parse_short(data):
     cls = SHORT_TO_CLASS.get(text.strip().upper())
     if cls is None:
         return None
-    return {"cls": cls, "tier": "L2", "demo": False, "ts": None, "short": True}
+    return {"cls": cls, "tier": "L2", "demo": False, "ts": None,
+            "score": None, "latency": None, "short": True}
 
 
 def decode(data):

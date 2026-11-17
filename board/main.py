@@ -4,7 +4,7 @@
 
 板子根目录应有的文件：
 
-    main.py  mqtt_link.py  protocol.py  k10_mqtt.py  ui_k10.py  config.py
+    main.py  mqtt_link.py  protocol.py  k10_mqtt.py  ui_k10.py  feedback.py  config.py
     doorbell.wav  knock.wav  kettle.wav  fire.wav
 
 其中 `config.py` 由 `config.example.py` 复制填写（不进版本库），4 个 wav 由
@@ -36,11 +36,24 @@ def main():
 
     _show("启动中…")
 
+    from feedback import Feedback
     from k10_mqtt import make_factory
     from mqtt_link import BoardLink
     from ui_k10 import K10Ui
 
-    ui = K10Ui(show_chinese=getattr(config, "SHOW_CHINESE", True))
+    feedback = Feedback(
+        buzzer_pin=getattr(config, "BUZZER_PIN", None),
+        vibration_pin=getattr(config, "VIBRATION_PIN", None),
+        buzzer_mode=getattr(config, "BUZZER_MODE", "active"),
+        buzzer_active_high=getattr(config, "BUZZER_ACTIVE_HIGH", True),
+        vibration_active_high=getattr(config, "VIBRATION_ACTIVE_HIGH", True),
+    )
+    ui = K10Ui(
+        show_chinese=getattr(config, "SHOW_CHINESE", True),
+        feedback=feedback,
+        tz_offset_hours=getattr(config, "TZ_OFFSET_HOURS", 8),
+        device_name=getattr(config, "DEVICE_NAME", "k10-01"),
+    )
     link = BoardLink(
         make_factory(config),
         ui,

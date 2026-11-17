@@ -52,18 +52,41 @@ class FakeClock:
 
 class FakeUi:
     def __init__(self) -> None:
-        self.shows: list[tuple] = []
+        self.shows: list[dict] = []
         self.cloud: list[bool] = []
         self.ticks = 0
 
-    def show(self, cls, tier, demo) -> None:
-        self.shows.append((cls, tier, demo))
+    def show(self, event) -> None:
+        self.shows.append(event)
 
     def set_cloud(self, connected) -> None:
         self.cloud.append(bool(connected))
 
     def tick(self) -> None:
         self.ticks += 1
+
+
+class FakePin:
+    def __init__(self, number) -> None:
+        self.number = number
+        self.digital: list[int] = []
+        self.analog: list[tuple] = []
+
+    def write_digital(self, value) -> None:
+        self.digital.append(value)
+
+    def write_analog(self, value=0, freq=0) -> None:
+        self.analog.append((value, freq))
+
+
+class FakePinFactory:
+    def __init__(self) -> None:
+        self.pins: dict[int, FakePin] = {}
+
+    def __call__(self, number) -> FakePin:
+        pin = FakePin(number)
+        self.pins[number] = pin
+        return pin
 
 
 class FakeMqtt:
@@ -146,10 +169,13 @@ def test_protocol_contract() -> None:
     check("上位机 JSON → 板子", event is not None and event["cls"] == "kettle" and event["demo"] is True, event)
     check("ts 保真", abs(event["ts"] - 1763265600.123) < 0.001)
     check("tier 保真", event["tier"] == "L3")
+    check("score 透传", abs(event["score"] - 0.74) < 0.001, event)
+    check("latency 透传", abs(event["latency"] - 0.41) < 0.001, event)
 
     short = pc_payload.encode_event(cls="fire", tier="L3", score=0.9, latency=0.4, ts=2.0, fmt="short")
     event = board_protocol.decode(short)
     check("上位机短码 → 板子", event is not None and event["cls"] == "fire" and event["ts"] is None, event)
+    check("短码没有 score", event["score"] is None, event)
 
     heartbeat = board_protocol.heartbeat_bytes("k10-01", 1763265600.0)
     parsed = pc_payload.parse_heartbeat(heartbeat)
@@ -352,6 +378,88 @@ def test_ignore_bad_input() -> None:
     check("主循环仍可继续", link.connected)
 
 
+def advance(fb, clock, ms, step=20):
+    end = clock.now + ms
+    while clock.now < end:
+        clock.now += step
+        fb.tick()
+
+
+def test_feedback() -> None:
+    section("外接蜂鸣器 / 震动节奏")
+    from feedback import Feedback
+
+    quiet = lambda message: None  # noqa: E731
+
+    clock = FakeClock()
+    pins = FakePinFactory()
+    fb = Feedback(buzzer_pin=0, vibration_pin=1, pin_factory=pins, clock=clock, log=quiet)
+    check("两个通道就绪", fb.ready)
+    fb.play("doorbell")
+    check("门铃：蜂鸣器立即响", pins.pins[0].digital == [1], pins.pins[0].digital)
+    check("门铃：马达立即震", pins.pins[1].digital == [1], pins.pins[1].digital)
+    advance(fb, clock, 200)
+    check("门铃：180ms 后蜂鸣器停", pins.pins[0].digital[-1] == 0, pins.pins[0].digital)
+    advance(fb, clock, 200)
+    check("门铃：350ms 后马达停", pins.pins[1].digital[-1] == 0, pins.pins[1].digital)
+
+    clock = FakeClock()
+    pins = FakePinFactory()
+    fb = Feedback(buzzer_pin=0, vibration_pin=1, pin_factory=pins, clock=clock, log=quiet)
+    fb.play("knock")
+    advance(fb, clock, 600)
+    check("敲门：两声", pins.pins[0].digital.count(1) == 2, pins.pins[0].digital)
+    check("敲门：震动也两下", pins.pins[1].digital.count(1) == 2, pins.pins[1].digital)
+
+    clock = FakeClock()
+    pins = FakePinFactory()
+    fb = Feedback(buzzer_pin=0, pin_factory=pins, clock=clock, log=quiet)
+    fb.play("kettle")
+    advance(fb, clock, 400)
+    check("水壶：长鸣 700ms 未结束", pins.pins[0].digital[-1] == 1, pins.pins[0].digital)
+    advance(fb, clock, 400)
+    check("水壶：700ms 后停", pins.pins[0].digital[-1] == 0, pins.pins[0].digital)
+
+    clock = FakeClock()
+    pins = FakePinFactory()
+    fb = Feedback(buzzer_pin=0, pin_factory=pins, clock=clock, log=quiet)
+    fb.play("fire")
+    advance(fb, clock, 3000)
+    check("火警：连续六声", pins.pins[0].digital.count(1) == 6, pins.pins[0].digital)
+
+    clock = FakeClock()
+    pins = FakePinFactory()
+    fb = Feedback(buzzer_pin=0, buzzer_mode="passive", pin_factory=pins, clock=clock, log=quiet)
+    fb.play("doorbell")
+    check("无源蜂鸣器走 PWM", pins.pins[0].analog[:1] == [(500, 880)], pins.pins[0].analog)
+    advance(fb, clock, 200)
+    check("无源蜂鸣器停止时占空比为 0", pins.pins[0].analog[-1][0] == 0, pins.pins[0].analog)
+
+    clock = FakeClock()
+    pins = FakePinFactory()
+    fb = Feedback(buzzer_pin=0, buzzer_active_high=False, pin_factory=pins, clock=clock, log=quiet)
+    fb.play("doorbell")
+    check("低电平触发模块", pins.pins[0].digital == [0], pins.pins[0].digital)
+
+    clock = FakeClock()
+    pins = FakePinFactory()
+    fb = Feedback(buzzer_pin=0, vibration_pin=1, pin_factory=pins, clock=clock, log=quiet)
+    fb.play("fire")
+    advance(fb, clock, 100)
+    before = list(pins.pins[0].digital)
+    fb.silence()
+    check("silence 立即停", pins.pins[0].digital[-1] == 0 and pins.pins[1].digital[-1] == 0, pins.pins[0].digital)
+    advance(fb, clock, 2000)
+    check("silence 后不再触发", pins.pins[0].digital == before + [0], pins.pins[0].digital)
+
+    fb = Feedback(log=quiet)
+    check("没配引脚就静默降级", fb.ready is False)
+    fb.play("doorbell")
+    fb.tick()
+    fb.silence()
+    check("没配引脚也不抛异常", True)
+
+
 def main() -> int:
     started = time.monotonic()
     test_protocol_contract()
@@ -359,6 +467,7 @@ def main() -> int:
     test_backoff()
     test_heartbeat_and_watchdog()
     test_network_drop()
+    test_feedback()
     test_ignore_bad_input()
 
     print()
@@ -368,7 +477,8 @@ def main() -> int:
             print(f"  - {name}")
         return 1
     print(f"全部通过（{time.monotonic() - started:.2f}s）。")
-    print("注：k10_mqtt.py / ui_k10.py 只能在真板上验证，本测试不覆盖。")
+    print("注：k10_mqtt.py / ui_k10.py 的硬件调用、feedback.py 的真实引脚只能在真板上验证；")
+    print("    本测试用假引脚覆盖了节奏逻辑与降级路径。")
     return 0
 
 
