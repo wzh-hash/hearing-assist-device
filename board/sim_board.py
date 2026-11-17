@@ -26,9 +26,9 @@ for entry in (str(ROOT), str(ROOT / "board")):
 
 import protocol  # noqa: E402  （board/protocol.py）
 
-from doorbell.iot import payload as pc_payload  # noqa: E402
-from doorbell.iot.link import paho_client_factory  # noqa: E402
-from doorbell.iot.settings import load  # noqa: E402
+from host.iot import payload as pc_payload  # noqa: E402
+from host.iot.link import paho_client_factory  # noqa: E402
+from host.iot.settings import load  # noqa: E402
 
 ACTIONS = {
     "doorbell": "屏幕「门铃」 · 短鸣 · 蓝色",

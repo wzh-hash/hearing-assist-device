@@ -81,7 +81,7 @@ class K10MqttClient:
             self._mqtt.connect(
                 server=config.HOST,
                 port=config.PORT,
-                client_id=getattr(config, "CLIENT_ID", "doorbell-k10-01"),
+                client_id=getattr(config, "CLIENT_ID", "hassist-k10-01"),
                 user=config.IOT_ID,
                 psd=config.IOT_PWD,
             )

@@ -1,7 +1,7 @@
 """固件侧载荷协议（REQ-01 §5.1–§5.3）。
 
 纯函数，不碰硬件、不联网，PC 上可直接单测。字段定义必须与上位机的
-`doorbell/iot/payload.py` 保持一致——`tools/board_selftest.py` 会做交叉校验，
+`host/iot/payload.py` 保持一致——`tools/board_selftest.py` 会做交叉校验，
 改这里就要同步改那边，否则测试会红。
 
 固件约束：只依赖 MicroPython 内置的 `json`，不引入任何第三方库（C-3）。

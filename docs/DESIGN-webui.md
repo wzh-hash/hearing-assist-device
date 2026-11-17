@@ -296,7 +296,7 @@ web\static\index.html?mock=1
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/health` | `{app:"doorbell-web",pid,port,mock:false}`；单实例探测 |
+| GET | `/api/health` | `{app:"hassist-web",pid,port,mock:false}`；单实例探测 |
 | GET | `/api/state` | 全量快照，含最近 40 条事件与 ≤300 条日志 |
 | GET | `/api/events?before=&limit=` | 更早事件（最多 300 条） |
 | GET | `/api/events/{seq}/analysis` | 该次判定录音的波形包络 + 64 带对数梅尔谱（0–1 归一），供事件详情画图 |
@@ -306,7 +306,7 @@ web\static\index.html?mock=1
 | POST | `/api/preview` | `{cls}` / `{test:true}` / `{file}`；试听命中带 `preview` |
 | POST | `/api/settings` | 阈值/门控/设备/学习次数/局域网/口令；`clear_password` |
 | POST | `/api/templates/refresh` | 重新扫描模板 |
-| POST | `/api/iot/config`、`/api/iot/test` | 上报配置与测试（映射到 `doorbell.iot.IotSettings`） |
+| POST | `/api/iot/config`、`/api/iot/test` | 上报配置与测试（映射到 `host.iot.IotSettings`） |
 | POST | `/api/recordings/clear` | 清空判定录音（二次确认） |
 | POST | `/api/auth` | `{password}` → HttpOnly Cookie；仅开启口令时需要 |
 | GET | `/api/export.csv` | UTF-8 BOM、列序固定、`session_YYYYMMDD_HHMMSS.csv` |

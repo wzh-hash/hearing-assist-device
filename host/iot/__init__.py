@@ -2,7 +2,7 @@
 
 对外只有这些名字；内部结构（连接、队列、心跳、重连）都属于实现细节。
 
-    from doorbell.iot import IotLink, IotSettings, load, save, apply_update, Status
+    from host.iot import IotLink, IotSettings, load, save, apply_update, Status
 
 典型用法：
 

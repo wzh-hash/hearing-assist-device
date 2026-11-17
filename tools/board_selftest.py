@@ -22,7 +22,7 @@ for entry in (str(ROOT / "board"), str(ROOT)):
 import protocol as board_protocol  # noqa: E402
 from mqtt_link import BoardLink  # noqa: E402
 
-from doorbell.iot import payload as pc_payload  # noqa: E402
+from host.iot import payload as pc_payload  # noqa: E402
 
 FAILURES: list[str] = []
 

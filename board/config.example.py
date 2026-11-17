@@ -22,7 +22,7 @@ STATUS_TOPIC = "平台分配的状态设备编码"
 
 # ---------- 板子身份 ----------
 DEVICE_NAME = "k10-01"
-CLIENT_ID = "doorbell-k10-01"  # 必须与上位机的 doorbell-pc-01 不同（D-1）
+CLIENT_ID = "hassist-k10-01"  # 必须与上位机的 hassist-pc-01 不同（D-1）
 HEARTBEAT_MS = 30000
 
 # ---------- 显示 ----------

@@ -45,8 +45,8 @@
 tools\install_autostart.bat
 ```
 
-安装后由任务计划程序在登录时隐藏启动服务（`pythonw.exe`，无黑色窗口）；日志写入 `sounds\logs\product.log`。
-卸载：`tools\uninstall_autostart.bat`。查看任务：`schtasks /query /tn HearingAidSensor`。
+安装后优先注册任务计划程序（登录触发、`pythonw.exe` 隐藏运行、失败重试）；当前账户没有注册权限时，自动退回「启动」文件夹快捷方式 + `tools/watchdog.py` 看门狗。两种方式都是隐藏启动，看门狗会把崩溃的服务拉起来。
+卸载：`tools\uninstall_autostart.bat`。日志：`sounds\logs\product.log`、`sounds\logs\watchdog.log`。
 
 ### 隐私与录音
 
@@ -57,7 +57,7 @@ tools\install_autostart.bat
 ### 自动恢复（看门狗）
 
 - **麦克风断开**：页面提示「麦克风断线，正在自动重试」，服务按 2 秒起、最长 30 秒的退避自动重连；恢复后提示消失。
-- **进程崩溃**：任务计划程序按失败重启（间隔 1 分钟）；页面在服务恢复后自动重连并补齐状态。
+- **进程崩溃**：看门狗每 10 秒探活，连续 2 次失败自动拉起（约 20 秒）；任务计划程序另有失败重启兜底。页面在服务恢复后自动重连并补齐状态。
 - **板子离线**：页面「上报」与板子心跳显示离线；识别与网页大字不受影响。
 
 ---
@@ -170,7 +170,8 @@ python -X utf8 tools\board_selftest.py
 ## 六、文件说明
 
 ```
-doorbell/
+听障/（项目根）
+├─ host/                 IoT 上报包（host/iot/：payload / link / settings / status）
 ├─ run_gui.bat         启动网页控制台（默认）← 双击这个
 ├─ run_gui_classic.bat  启动经典桌面窗口（回退）
 ├─ pc_web.py            网页入口：识别 / 播放 / IoT / HTTP 同进程
@@ -187,7 +188,7 @@ doorbell/
 ├─ docs/DESIGN-webui.md 网页设计定稿与接口契约
 ├─ assets/web-desktop.png / web-phone.png  网页截图
 ├─ assets/gui-screenshot.png  经典窗口截图
-├─ sounds/              门铃音频；学习后生成 learned_*.wav 和 config.json
+├─ sounds/              四类事件音频；学习后生成 learned_*.wav 和 config.json
 ├─ sounds/iot.json      IoT 配置（含密码，gitignore，不进版本库）
 ├─ sounds/logs/         隐藏运行时的日志（product.log，gitignore）
 ├─ sounds_raw/          原始下载音频（Wikimedia Commons，Public Domain / CC0）
@@ -227,7 +228,7 @@ run.bat selftest                :: 离线自检
 ## 九、物联网（EasyIoT → 行空板 K10）的位置
 
 命中事件在 `Detector` 返回的 `{"type": "hit", "score": ..., "latency": ...}` 里：
-- 网页：`web/app.py` 的 `_record_event()` → `IotLink.publish()`（`doorbell/iot/`）
+- 网页：`web/app.py` 的 `_record_event()` → `IotLink.publish()`（`host/iot/`）
 - 经典 GUI：`src/pc_gui.py` 的 `_on_event()`
 - 命令行：`src/pc_recognizer.py` 的 `cmd_listen()`
 
@@ -295,7 +296,7 @@ run.bat selftest                :: 离线自检
 
 ## 十一、Git 版本管理
 
-项目已初始化 Git 仓库（doorbell/.git），当前分支 main。
+项目已初始化 Git 仓库（根目录 `.git`），当前分支 main。
 
 `at
 git status                    :: 看改动

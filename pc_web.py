@@ -79,7 +79,7 @@ def probe_existing(ports: tuple[int, ...]) -> int | None:
                 data = json.loads(response.read().decode("utf-8"))
         except Exception:  # noqa: BLE001
             continue
-        if data.get("app") == "doorbell-web" and not data.get("mock"):
+        if data.get("app") == "hassist-web" and not data.get("mock"):
             return port
     return None
 
@@ -144,7 +144,7 @@ def main() -> None:
     serving = threading.Thread(
         target=server.serve_forever,
         kwargs={"poll_interval": 0.2},
-        name="doorbell-http",
+        name="hassist-http",
         daemon=True,
     )
     serving.start()

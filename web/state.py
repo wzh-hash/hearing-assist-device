@@ -370,7 +370,7 @@ class StateBus:
             heard = self.mode == "listening" and now < self.heard_until
 
             return {
-                "app": "doorbell-web",
+                "app": "hassist-web",
                 "mock": False,
                 "seq": self.seq,
                 "now": now_ms,

@@ -71,7 +71,7 @@ run_gui_classic.bat       新增，启动 pc_gui.py（回退）
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| GET | `/api/health` | `{app:"doorbell-web",pid,port}`，供单实例探测 |
+| GET | `/api/health` | `{app:"hassist-web",pid,port}`，供单实例探测 |
 | GET | `/api/state` | 全量状态（模式、大字、电平、底噪、iot、板子、统计、模板） |
 | GET | `/api/events?since=seq` | 增量事件 |
 | GET | `/events` | SSE：状态 8 Hz、事件即时、1 Hz 心跳 |

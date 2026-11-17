@@ -17,7 +17,7 @@ import traceback
 import numpy as np
 
 import pc_recognizer as R
-from doorbell.iot import (
+from host.iot import (
     ConfigError as IotConfigError,
     IotLink,
     Status,
@@ -109,12 +109,12 @@ class App:
 
     def start(self) -> None:
         self.iot_link.start()
-        self._ticker = threading.Thread(target=self._tick_loop, name="doorbell-ticker", daemon=True)
+        self._ticker = threading.Thread(target=self._tick_loop, name="hassist-ticker", daemon=True)
         self._ticker.start()
         threading.Thread(
             target=self.audio.preopen,
             args=(self._output_index(),),
-            name="doorbell-preopen",
+            name="hassist-preopen",
             daemon=True,
         ).start()
         self.log("服务已启动")
@@ -391,7 +391,7 @@ class App:
             thread = threading.Thread(
                 target=self._listen_loop,
                 args=(self._listen_stop, threshold),
-                name="doorbell-listen",
+                name="hassist-listen",
                 daemon=True,
             )
             self._listen_thread = thread
@@ -406,7 +406,7 @@ class App:
             if thread and thread.is_alive():
                 self._stopping = True
                 threading.Thread(
-                    target=self._join_listener, args=(thread,), name="doorbell-join", daemon=True
+                    target=self._join_listener, args=(thread,), name="hassist-join", daemon=True
                 ).start()
             else:
                 self._listen_thread = None
@@ -807,7 +807,7 @@ class App:
             })
             self.log(f"开始学习，共 {takes} 次")
             thread = threading.Thread(
-                target=self._learn_loop, args=(takes,), name="doorbell-learn", daemon=True
+                target=self._learn_loop, args=(takes,), name="hassist-learn", daemon=True
             )
             self._learn_thread = thread
             thread.start()
@@ -941,7 +941,7 @@ class App:
             self._begin_playback("test", "测试音", test=True, duration=1.0)
             threading.Thread(
                 target=self.audio.play_test_tone, args=(index,),
-                name="doorbell-testtone", daemon=True,
+                name="hassist-testtone", daemon=True,
             ).start()
             return {"ok": True}
 
@@ -953,7 +953,7 @@ class App:
             self._begin_playback("file", os.path.basename(path), test=False, duration=duration)
             threading.Thread(
                 target=self.audio.play, args=(path, 1.0, index),
-                name="doorbell-play-file", daemon=True,
+                name="hassist-play-file", daemon=True,
             ).start()
             return {"ok": True}
 
@@ -972,7 +972,7 @@ class App:
         threading.Thread(
             target=self.audio.play,
             args=(path, float(R.PLAY_GAIN.get(cls, 1.0)), index),
-            name="doorbell-play", daemon=True,
+            name="hassist-play", daemon=True,
         ).start()
         timer = threading.Timer(0.35, self._record_preview, args=(cls,))
         timer.daemon = True

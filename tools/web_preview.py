@@ -346,7 +346,7 @@ class Hub:
 
     def snapshot_locked(self, ts: float) -> dict:
         return {
-            "app": "doorbell-web",
+            "app": "hassist-web",
             "mock": True,
             "seq": self.seq,
             "now": int(ts),
@@ -821,7 +821,7 @@ class Server(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "doorbell-preview/0.1"
+    server_version = "hassist-preview/0.1"
 
     # -- 基础 ---------------------------------------------------------------
 
@@ -913,7 +913,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/health":
                 self.send_json(200, {
-                    "app": "doorbell-web",
+                    "app": "hassist-web",
                     "mock": True,
                     "pid": os.getpid(),
                     "port": self.server.server_address[1],

@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_HOST = "iot.dfrobot.com.cn"
 DEFAULT_PORT = 1883
-DEFAULT_CLIENT_ID = "doorbell-pc-01"
+DEFAULT_CLIENT_ID = "hassist-pc-01"
 DEFAULT_DEVICE = "k10-01"
 
 #: 页面与日志里统一用它表示"密码已设置"

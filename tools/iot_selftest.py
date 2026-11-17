@@ -23,16 +23,16 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from doorbell.iot import payload  # noqa: E402
-from doorbell.iot.errors import ConfigError  # noqa: E402
-from doorbell.iot.link import IotLink  # noqa: E402
-from doorbell.iot.settings import (  # noqa: E402
+from host.iot import payload  # noqa: E402
+from host.iot.errors import ConfigError  # noqa: E402
+from host.iot.link import IotLink  # noqa: E402
+from host.iot.settings import (  # noqa: E402
     IotSettings,
     apply_update,
     load,
     save,
 )
-from doorbell.iot.status import Status  # noqa: E402
+from host.iot.status import Status  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -79,7 +79,7 @@ def base_settings(**overrides) -> IotSettings:
         iot_pwd="secret-pwd",
         event_topic="evt123",
         status_topic="hb456",
-        client_id="doorbell-pc-01",
+        client_id="hassist-pc-01",
         qos=1,
     )
     values.update(overrides)
@@ -400,7 +400,7 @@ def test_connection_test() -> None:
     link = IotLink(base_settings(), client_factory=factory)
     result = link.test()
     check("成功", result["ok"] is True, result)
-    check("独立客户端标识", factory.clients[0].client_id.startswith("doorbell-pc-01-test-"), factory.clients[0].client_id)
+    check("独立客户端标识", factory.clients[0].client_id.startswith("hassist-pc-01-test-"), factory.clients[0].client_id)
     check("不影响主连接", link.snapshot().status is Status.DISABLED, link.snapshot().status)
 
     factory = Factory(connect_failure=4)
@@ -448,10 +448,10 @@ def test_apply_and_logging() -> None:
 
 def test_paho_adapter() -> None:
     section("paho 适配器")
-    from doorbell.iot.link import paho_client_factory
+    from host.iot.link import paho_client_factory
 
     try:
-        client = paho_client_factory(base_settings(), client_id="doorbell-pc-01")
+        client = paho_client_factory(base_settings(), client_id="hassist-pc-01")
         check("可构造 paho 客户端（含 lib/ 回退）", client is not None)
     except Exception as exc:  # noqa: BLE001  —— 这里就是要展示失败原因
         check("可构造 paho 客户端（含 lib/ 回退）", False, f"{type(exc).__name__}: {exc}")

@@ -49,7 +49,7 @@ class Server(ThreadingHTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    server_version = "doorbell-web/1.0"
+    server_version = "hassist-web/1.0"
 
     # ------------------------------------------------------------------
     # 基础
@@ -148,7 +148,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if path == "/api/health":
                 self.send_json(200, {
-                    "app": "doorbell-web",
+                    "app": "hassist-web",
                     "mock": False,
                     "pid": os.getpid(),
                     "port": self.server.server_address[1],

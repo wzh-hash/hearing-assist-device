@@ -205,7 +205,7 @@
 
     function snapshot() {
       return {
-        app: 'doorbell-web',
+        app: 'hassist-web',
         mock: true,
         seq: hub.seq,
         now: now(),
@@ -522,7 +522,7 @@
         const isTest = !!body.test;
 
         if (body.file) {
-          const cls = /doorbell/.test(body.file) ? 'doorbell'
+          const cls = /host/.test(body.file) ? 'doorbell'
             : /knock/.test(body.file) ? 'knock'
             : /kettle/.test(body.file) ? 'kettle'
             : /fire/.test(body.file) ? 'fire' : 'doorbell';

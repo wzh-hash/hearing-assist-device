@@ -165,7 +165,7 @@ class IotLink:
             self._closing = False
             self._stop.clear()
             self._set_status(Status.CONNECTING)
-            self._worker = threading.Thread(target=self._run, name="doorbell-iot", daemon=True)
+            self._worker = threading.Thread(target=self._run, name="hassist-iot", daemon=True)
             self._worker.start()
 
     def stop(self) -> None:

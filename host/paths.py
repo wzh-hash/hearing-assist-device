@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-#: 仓库根（doorbell/ 的上一级）
+#: 仓库根（host/ 的上一级）
 ROOT = Path(__file__).resolve().parent.parent
 
 #: 音频资产与录音目录（现有识别引擎也用它）

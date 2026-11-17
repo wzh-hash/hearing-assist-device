@@ -49,7 +49,7 @@ copy /Y sounds\backup_test\learned_*.wav sounds\
 
 | # | 操作 | 期望 |
 |---|---|---|
-| 1 | 打开 `http://127.0.0.1:8765/api/health` | `{"app":"doorbell-web","mock":false,...}` |
+| 1 | 打开 `http://127.0.0.1:8765/api/health` | `{"app":"hassist-web","mock":false,...}` |
 | 2 | 点「开始监听」 | ≤1 秒进入监听；点变绿；大字「监听中」；环随环境声跳动 |
 | 3 | 说一句话 / 拍手 | 状态点短暂变黄；副文案「听到声音，正在判断…」 |
 | 4 | 点「停止监听」 | ≤1 秒大字「已停止」；电平 `-- dB`；点变灰 |
