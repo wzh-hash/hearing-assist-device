@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""环境事件识别台 · 网页入口。
+"""听障人士感知器 · 网页入口。
 
 一个进程里同时跑：识别线程、学习线程、播放、IoT 上报、HTTP/SSE。
 双击 `run_gui.bat` 就是启动它；经典桌面窗口由 `run_gui_classic.bat` 启动。
+开机自启时用 `pythonw.exe` 隐藏运行，日志写入 `sounds/logs/product.log`。
 """
 
 from __future__ import annotations
@@ -28,6 +29,33 @@ from web.http_api import Handler, Server  # noqa: E402
 
 DEFAULT_PORT = 8765
 HEALTH_TIMEOUT = 0.5
+LOG_DIR = ROOT / "sounds" / "logs"
+LOG_FILE = LOG_DIR / "product.log"
+
+
+def ensure_streams() -> None:
+    """pythonw 隐藏运行时 stdout/stderr 为 None：把输出写到日志文件。
+
+    日志超过 2 MB 时轮转一份（product.log.1），保留最近两代，避免长期运行撑爆磁盘。
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 2 * 1024 * 1024:
+            backup = LOG_DIR / "product.log.1"
+            try:
+                backup.unlink()
+            except OSError:
+                pass
+            LOG_FILE.rename(backup)
+        handle = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+    except OSError:
+        return
+    if sys.stdout is None:
+        sys.stdout = handle
+    if sys.stderr is None:
+        sys.stderr = handle
 
 
 def lan_ip() -> str:
@@ -70,13 +98,18 @@ def bind_server(host: str, port: int) -> Server:
 
 
 def main() -> None:
+    ensure_streams()
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
         sys.stderr.reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
     except Exception:  # noqa: BLE001
         pass
+    try:
+        print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] 启动 听障人士感知器", flush=True)
+    except Exception:  # noqa: BLE001
+        pass
 
-    parser = argparse.ArgumentParser(description="环境事件识别台 · 网页控制台")
+    parser = argparse.ArgumentParser(description="听障人士感知器 · 网页控制台")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT,
                         help="起始端口；被占用时自动 +1 / +2")
     parser.add_argument("--no-lan", action="store_true",
@@ -123,7 +156,7 @@ def main() -> None:
             pass
 
     print("")
-    print("  环境事件识别台 · 网页控制台")
+    print("  听障人士感知器 · 网页控制台")
     print("  " + "-" * 52)
     print(f"  本机    {local}")
     if app.lan_enabled and not args.no_lan:
