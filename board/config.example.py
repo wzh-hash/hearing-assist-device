@@ -26,8 +26,9 @@ CLIENT_ID = "doorbell-k10-01"  # 必须与上位机的 doorbell-pc-01 不同（D
 HEARTBEAT_MS = 30000
 
 # ---------- 显示 ----------
-# 中文是否可用取决于固件字体（R-2）；显示异常时改成 False，退化为 DOOR / KNOCK / ...
-SHOW_CHINESE = True
+# 界面固定英文（DOOR / KNOCK / KETTLE / FIRE / CLOUD / WAIT / SCORE）。
+# 该选项仅为兼容旧配置保留，当前固件忽略它。
+SHOW_CHINESE = False
 # 事件时间按这个时区显示（不依赖板子 RTC，用时间戳直接换算）
 TZ_OFFSET_HOURS = 8
 

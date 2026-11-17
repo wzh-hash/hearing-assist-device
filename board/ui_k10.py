@@ -1,22 +1,26 @@
-"""K10 界面：屏幕 + 3 颗 WS2812 + 预置 WAV + 外接蜂鸣器/震动。
+"""K10 界面：LVGL 标签 + 外置英文字库（48px / 20px）+ 3 颗 WS2812 + WAV。
 
-屏幕布局（240×320 竖屏）：
+界面**只用英文**（DOOR / KNOCK / KETTLE / FIRE、CLOUD、WAIT…），不依赖中文字形；
+K10 官方 MicroPython 固件内置字体不含中文、`screen.draw_text` 字号也不受控（D-24）。
 
-    ┌──────────────────────────────┐
-    │ ● 云端                 k10-01 │  ← 状态条
-    │ 15:42:03            [演示]    │
-    │                              │
-    │            门铃               │  ← 大字（中文可切短码）
-    │            DOOR               │
-    │  [L2]   得分 0.80 · 0.42s     │
-    │                              │
-    │  按门铃 / 手机试听             │
-    └──────────────────────────────┘
+字库由 `tools/make_board_fonts.py` 生成（只含 ASCII），放在板子根目录；
+**buffer 必须一直被引用**，LVGL 不拷贝字库数据。
 
-声音仍由 `board/sounds/*.wav` 走 2W 扬声器（D-20）；蜂鸣器与震动是**外接**器件，
-节奏见 `feedback.py`，没配引脚就静默跳过。
+    data = open("font_ui48.bin", "rb").read()
+    font = lv.binfont_create_from_buffer(data, len(data))
+    label.set_style_text_font(font, 0)
 
-中文显示取决于固件字体（R-2）：`SHOW_CHINESE=False` 时大字退化为短码。
+三层降级：
+1. 正常：LVGL + 48px/20px 字库；
+2. 字库缺失：LVGL 内置字体（字小，但内容不变）；
+3. LVGL 不可用：退回 `screen.draw_text`（纯 ASCII 小字）。
+
+屏幕布局（240×320，无底部提示行）：
+
+    ● CLOUD                k10-01
+    15:42:03              DEMO
+              DOOR
+    [L2]    SCORE 0.80 · 0.42s
 """
 
 import time
@@ -27,8 +31,13 @@ except ImportError:  # pragma: no cover
     os = None
 
 try:
+    import lvgl as lv
+except Exception:  # PC 上导入、或固件没有 LVGL
+    lv = None
+
+try:
     from unihiker_k10 import screen
-except Exception:  # PC 上导入本模块时没有硬件库
+except Exception:
     screen = None
 
 try:
@@ -42,8 +51,8 @@ except Exception:
     speaker = None
 
 
-W = 240
-BAR_H = 30
+FONT_BIG_FILE = "font_ui48.bin"
+FONT_SMALL_FILE = "font_ui20.bin"
 
 COLORS = {
     "doorbell": 0x3399FF,  # 蓝
@@ -52,7 +61,6 @@ COLORS = {
     "fire": 0xFF2200,      # 红
 }
 TIER_COLORS = {"L1": 0x2F80ED, "L2": 0xF2C94C, "L3": 0xEB5757}
-TEXTS_CN = {"doorbell": "门铃", "knock": "敲门", "kettle": "水壶", "fire": "火警"}
 TEXTS_SHORT = {"doorbell": "DOOR", "knock": "KNOCK", "kettle": "KETTLE", "fire": "FIRE"}
 SOUND_FILES = {
     "doorbell": "doorbell.wav",
@@ -60,11 +68,6 @@ SOUND_FILES = {
     "kettle": "kettle.wav",
     "fire": "fire.wav",
 }
-
-BAR_BG = 0x101820
-TEXT_DIM = 0x8899AA
-TEXT_SOFT = 0xCCCCCC
-BG = 0x000000
 
 BLINK_MS = 400
 BLINK_TOTAL_MS = 5000
@@ -81,7 +84,6 @@ def _now_ms():
 
 
 def _hms(ts, tz_hours):
-    """Unix 时间戳 → HH:MM:SS（不依赖板子 RTC，只做算术）。"""
     if ts is None:
         return "--:--:--"
     try:
@@ -90,18 +92,6 @@ def _hms(ts, tz_hours):
         return "--:--:--"
     seconds %= 86400
     return "%02d:%02d:%02d" % (seconds // 3600, (seconds % 3600) // 60, seconds % 60)
-
-
-def _text_width(text, size):
-    """粗估文字宽度：中文按 1 个字宽，ASCII 按 0.55。"""
-    width = 0
-    for char in text:
-        width += size if ord(char) > 127 else int(size * 0.55)
-    return width
-
-
-def _center_x(text, size, left=0, width=W):
-    return max(left + 2, left + (width - _text_width(text, size)) // 2)
 
 
 class K10Ui:
@@ -125,13 +115,27 @@ class K10Ui:
         self._blink_until = 0
         self._blink_at = 0
         self._blink_on = False
-        self._draw_error_logged = False
+        self._error_logged = False
+        self._font_buffers = []
 
-        if screen is not None:
+        self._mode = "none"
+        if lv is not None and screen is not None:
             try:
-                screen.init(dir=2)
-            except Exception as exc:
+                self._init_lvgl()
+                self._mode = "lvgl"
+            except Exception as exc:  # noqa: BLE001
+                self._log("LVGL 界面初始化失败（%s），回退到 canvas" % exc)
+                self._mode = "canvas"
+
+        if self._mode in ("canvas", "none"):
+            try:
+                if screen is not None:
+                    screen.init(dir=2)
+                self._mode = "canvas"
+            except Exception as exc:  # noqa: BLE001
                 self._log("屏幕初始化失败：%s" % exc)
+                self._mode = "none"
+
         if rgb is not None:
             try:
                 rgb.brightness(9)
@@ -139,13 +143,86 @@ class K10Ui:
                 pass
         self._draw_idle()
 
-    # ---------- 对外接口（BoardLink 只会调这三个） ----------
+    # ---------- 初始化 ----------
+
+    def _load_font(self, name):
+        try:
+            raw = open(name, "rb").read()
+        except OSError:
+            raise RuntimeError("缺少字库 %s" % name)
+        try:
+            font = lv.binfont_create_from_buffer(raw, len(raw))
+        except TypeError:
+            font = lv.binfont_create_from_buffer(raw)
+        if font is None:
+            raise RuntimeError("字库加载失败 %s" % name)
+        self._font_buffers.append(raw)  # 必须保活：LVGL 不拷贝字库数据
+        return font
+
+    def _init_lvgl(self):
+        screen.init(dir=2)
+        self._scrn = lv.screen_active() if hasattr(lv, "screen_active") else lv.scr_act()
+        self._scrn.set_style_bg_color(lv.color_hex(0x000000), 0)
+
+        self._fonts_ok = False
+        try:
+            self._font_big = self._load_font(FONT_BIG_FILE)
+            self._font_small = self._load_font(FONT_SMALL_FILE)
+            self._fonts_ok = True
+        except Exception as exc:  # noqa: BLE001
+            self._log("字库不可用（%s），改用内置字体的英文短码" % exc)
+            self._font_big = getattr(lv, "font_k10_24", None) or lv.font_montserrat_24
+            self._font_small = getattr(lv, "font_k10_16", None) or lv.font_montserrat_16
+
+        self._dot = None
+        try:
+            self._dot = lv.obj(self._scrn)
+            self._dot.set_size(10, 10)
+            self._dot.set_style_bg_color(lv.color_hex(0xEB5757), 0)
+            self._dot.set_style_border_width(0, 0)
+            self._dot.set_style_radius(5, 0)
+            self._dot.set_style_pad_all(0, 0)
+            self._dot.align(lv.ALIGN.TOP_LEFT, 8, 11)
+        except Exception:
+            self._dot = None
+
+        self._status = self._label(self._font_small, 0xFFFFFF, lv.ALIGN.TOP_LEFT, 24, 6)
+        self._device = self._label(self._font_small, 0x8899AA, lv.ALIGN.TOP_RIGHT, -8, 6)
+        self._time = self._label(self._font_small, 0x8899AA, lv.ALIGN.TOP_LEFT, 10, 38)
+        self._demo = self._label(self._font_small, 0xE67E22, lv.ALIGN.TOP_RIGHT, -10, 34)
+        self._big = self._label(self._font_big, 0xFFFFFF, lv.ALIGN.CENTER, 0, -50)
+        self._short = self._label(self._font_small, 0x667788, lv.ALIGN.CENTER, 0, 20)
+        self._tier = self._label(self._font_small, 0xFFFFFF, lv.ALIGN.BOTTOM_LEFT, 10, -40)
+        self._badge(self._tier, 0x2F80ED)
+        self._detail = self._label(self._font_small, 0xCCCCCC, lv.ALIGN.BOTTOM_LEFT, 78, -46)
+
+        self._set_text(self._device, self._device_name)
+
+    def _label(self, font, color, align, x, y):
+        label = lv.label(self._scrn)
+        label.set_style_text_font(font, 0)
+        label.set_style_text_color(lv.color_hex(color), 0)
+        label.align(align, x, y)
+        return label
+
+    def _badge(self, label, color):
+        try:
+            label.set_style_bg_color(lv.color_hex(color), 0)
+            label.set_style_bg_opa(lv.OPA.COVER, 0)
+            label.set_style_pad_all(4, 0)
+            label.set_style_radius(4, 0)
+        except Exception:
+            pass
+
+    # ---------- 对外接口 ----------
 
     def show(self, event):
-        """event 是 `protocol.decode()` 的返回值（cls/tier/demo/ts/score/latency）。"""
         self._last_event = event
         cls = event.get("cls", "")
-        self._draw_event(event)
+        if self._mode == "lvgl":
+            self._show_lvgl(event)
+        else:
+            self._show_canvas(event)
         self._rgb(COLORS.get(cls, 0xFFFFFF))
         self._play(cls)
         if self._feedback is not None:
@@ -167,10 +244,9 @@ class K10Ui:
         if self._last_event is None:
             self._draw_idle()
         else:
-            self._draw_event(self._last_event)
+            self.show(self._last_event)
 
     def tick(self):
-        """火警红闪 + 外接提醒节奏；都跑在主循环里，不阻塞。"""
         now = _now_ms()
         if self._feedback is not None:
             try:
@@ -184,18 +260,141 @@ class K10Ui:
             if self._blink_on:
                 self._blink_on = False
                 self._rgb(0x000000)
+                if self._mode == "lvgl" and self._last_event is not None:
+                    self._set_color(self._big, COLORS.get(self._last_event.get("cls"), 0xFFFFFF))
             return
         if now - self._blink_at < BLINK_MS:
             return
         self._blink_at = now
         self._blink_on = not self._blink_on
         self._rgb(COLORS["fire"] if self._blink_on else 0x000000)
+        if self._mode == "lvgl":
+            self._set_color(self._big, COLORS["fire"] if self._blink_on else 0x330000)
 
-    # ---------- 绘制 ----------
+    # ---------- LVGL 绘制 ----------
 
-    def _label(self, cls):
-        table = TEXTS_CN if self._show_chinese else TEXTS_SHORT
-        return table.get(cls, cls)
+    def _set_text(self, label, text):
+        try:
+            if label is not None:
+                label.set_text(text)
+        except Exception as exc:  # noqa: BLE001
+            self._log_once("设置文字失败：%s" % exc)
+
+    def _set_color(self, label, color):
+        try:
+            if label is not None:
+                label.set_style_text_color(lv.color_hex(color), 0)
+        except Exception:
+            pass
+
+    def _label_text(self, cls):
+        return TEXTS_SHORT.get(cls, cls.upper())
+
+    def _set_status(self, online):
+        self._set_text(self._status, "CLOUD" if online else "LINK DOWN")
+        self._set_color(self._status, 0xFFFFFF if online else 0xFF6B6B)
+        try:
+            if self._dot is not None:
+                self._dot.set_style_bg_color(lv.color_hex(0x2ECC71 if online else 0xEB5757), 0)
+        except Exception:
+            pass
+
+    def _show_lvgl(self, event):
+        cls = event.get("cls", "")
+        tier = event.get("tier", "L2")
+        demo = bool(event.get("demo"))
+        color = COLORS.get(cls, 0xFFFFFF)
+
+        self._set_status(True)
+        self._set_text(self._time, _hms(event.get("ts"), self._tz))
+        self._set_text(self._demo, "DEMO" if demo else "")
+        self._set_text(self._big, self._label_text(cls))
+        self._set_color(self._big, color)
+        self._set_text(self._short, TEXTS_SHORT.get(cls, cls.upper()))
+        self._set_text(self._tier, tier)
+        self._badge(self._tier, TIER_COLORS.get(tier, 0x888888))
+        self._set_text(self._detail, self._detail_text(event))
+
+    def _detail_text(self, event):
+        parts = []
+        score = event.get("score")
+        if isinstance(score, (int, float)) and not isinstance(score, bool):
+            parts.append("SCORE %.2f" % float(score))
+        latency = event.get("latency")
+        if isinstance(latency, (int, float)) and not isinstance(latency, bool):
+            parts.append("%.2fs" % float(latency))
+        return " · ".join(parts)
+
+    def _draw_idle(self):
+        if self._mode == "lvgl":
+            if self._last_event is None:
+                self._set_text(self._big, "WAIT")
+                self._set_color(self._big, 0xCCCCCC)
+                self._set_text(self._short, "")
+                self._set_text(self._detail, "")
+                self._set_text(self._demo, "")
+                self._set_text(self._time, "--:--:--")
+                self._set_text(self._tier, "")
+            self._set_status(self._cloud)
+            return
+        if self._mode == "canvas":
+            self._canvas_clear()
+            self._canvas_text("WAIT", 10, 100, 24, 0xCCCCCC)
+            self._canvas_text("CLOUD " + ("ON" if self._cloud else "OFF"), 10, 40, 16, 0x8899AA)
+            self._canvas_flush()
+
+    def _draw_cloud_down(self):
+        if self._mode == "lvgl":
+            self._set_status(False)
+            self._set_text(self._big, "LINK DOWN")
+            self._set_color(self._big, 0xEB5757)
+            self._set_text(self._short, "")
+            self._set_text(self._detail, "")
+            self._set_text(self._tier, "")
+            return
+        if self._mode == "canvas":
+            self._canvas_clear()
+            self._canvas_text("LINK DOWN", 10, 100, 24, 0xEB5757)
+            self._canvas_flush()
+
+    # ---------- canvas 降级（纯 ASCII，字号受限） ----------
+
+    def _show_canvas(self, event):
+        cls = event.get("cls", "")
+        tier = event.get("tier", "L2")
+        short = TEXTS_SHORT.get(cls, cls.upper())
+        self._canvas_clear()
+        self._canvas_text(short, 10, 90, 24, COLORS.get(cls, 0xFFFFFF))
+        self._canvas_text(tier + "  " + _hms(event.get("ts"), self._tz), 10, 140, 16, 0x8899AA)
+        detail = self._detail_text(event)
+        if detail:
+            self._canvas_text(detail, 10, 170, 16, 0xCCCCCC)
+        self._canvas_text("CLOUD ON", 10, 40, 16, 0x2ECC71)
+        self._canvas_flush()
+
+    def _canvas_text(self, text, x, y, size, color):
+        try:
+            if screen is not None:
+                screen.draw_text(text=text, x=x, y=y, font_size=size, color=color)
+        except Exception as exc:  # noqa: BLE001
+            self._log_once("canvas 绘制失败：%s" % exc)
+
+    def _canvas_clear(self):
+        try:
+            if screen is not None:
+                screen.clear()
+                screen.show_bg(color=0x000000)
+        except Exception:
+            pass
+
+    def _canvas_flush(self):
+        try:
+            if screen is not None:
+                screen.show_draw()
+        except Exception:
+            pass
+
+    # ---------- 其他 ----------
 
     def _rgb(self, color):
         if rgb is None:
@@ -204,110 +403,6 @@ class K10Ui:
             rgb.write(color=color)
         except Exception as exc:
             self._log_once("RGB 失败：%s" % exc)
-
-    def _clear(self):
-        if screen is None:
-            return
-        try:
-            screen.clear()
-        except Exception:
-            pass
-
-    def _flush(self):
-        if screen is None:
-            return
-        try:
-            screen.show_draw()
-        except Exception as exc:
-            self._log_once("刷屏失败：%s" % exc)
-
-    def _fill(self, x, y, w, h, color):
-        if screen is None:
-            return
-        try:
-            screen.draw_rect(x=x, y=y, w=w, h=h, bcolor=color, fcolor=color)
-        except Exception as exc:
-            self._log_once("画矩形失败：%s" % exc)
-
-    def _text(self, text, x, y, size, color):
-        if screen is None:
-            return
-        try:
-            screen.draw_text(text=text, x=x, y=y, font_size=size, color=color)
-        except Exception as exc:
-            self._log_once("绘制失败：%s" % exc)
-
-    def _log_once(self, message):
-        if self._draw_error_logged:
-            return
-        self._draw_error_logged = True
-        self._log(message)
-
-    def _status_bar(self):
-        self._fill(0, 0, W, BAR_H, BAR_BG)
-        color = 0x2ECC71 if self._cloud else 0xEB5757
-        self._fill(8, 11, 10, 10, color)
-        self._text("云端" if self._cloud else "云端断开", 24, 7, 16, 0xFFFFFF)
-        x = W - 8 - _text_width(self._device_name, 14)
-        self._text(self._device_name, max(4, x), 8, 14, TEXT_DIM)
-
-    def _draw_event(self, event):
-        cls = event.get("cls", "")
-        tier = event.get("tier", "L2")
-        demo = bool(event.get("demo"))
-        color = COLORS.get(cls, 0xFFFFFF)
-
-        self._clear()
-        self._status_bar()
-
-        self._text(_hms(event.get("ts"), self._tz), 10, 38, 20, TEXT_DIM)
-        if demo:
-            self._fill(158, 37, 72, 24, 0xE67E22)
-            self._text("演示", 178, 39, 16, 0xFFFFFF)
-
-        label = self._label(cls)
-        label_size = 56 if len(label) <= 2 else 44
-        self._text(label, _center_x(label, label_size), 92, label_size, color)
-
-        short = TEXTS_SHORT.get(cls, cls.upper())
-        self._text(short, _center_x(short, 18), 176, 18, 0x667788)
-
-        self._fill(10, 204, 52, 26, TIER_COLORS.get(tier, 0x888888))
-        self._text(tier, _center_x(tier, 18, 10, 52), 208, 18, 0xFFFFFF)
-
-        detail = self._detail(event)
-        if detail:
-            self._text(detail, 74, 208, 16, TEXT_SOFT)
-
-        self._text("按门铃 / 手机试听", _center_x("按门铃 / 手机试听", 14), 272, 14, 0x556677)
-        self._flush()
-
-    def _detail(self, event):
-        parts = []
-        score = event.get("score")
-        if isinstance(score, (int, float)) and not isinstance(score, bool):
-            parts.append("得分 %.2f" % float(score))
-        latency = event.get("latency")
-        if isinstance(latency, (int, float)) and not isinstance(latency, bool):
-            parts.append("%.2fs" % float(latency))
-        return " · ".join(parts)
-
-    def _draw_idle(self):
-        self._clear()
-        self._status_bar()
-        self._text("等待事件", _center_x("等待事件", 32), 108, 32, TEXT_SOFT)
-        self._text("按门铃 / 手机试听", _center_x("按门铃 / 手机试听", 16), 158, 16, 0x667788)
-        self._text(self._device_name, 10, 272, 14, 0x556677)
-        self._flush()
-
-    def _draw_cloud_down(self):
-        self._clear()
-        self._status_bar()
-        self._text("云端断开", _center_x("云端断开", 32), 108, 32, 0xEB5757)
-        self._text("正在重连…", _center_x("正在重连…", 16), 158, 16, TEXT_DIM)
-        self._flush()
-
-    # ---------- 声音 ----------
 
     def _play(self, cls):
         if speaker is None:
@@ -328,3 +423,9 @@ class K10Ui:
             speaker.play_sys_music(name)
         except Exception as exc:
             self._log("播放 %s 失败：%s" % (name, exc))
+
+    def _log_once(self, message):
+        if self._error_logged:
+            return
+        self._error_logged = True
+        self._log(message)

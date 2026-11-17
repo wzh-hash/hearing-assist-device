@@ -5,6 +5,7 @@
 板子根目录应有的文件：
 
     main.py  mqtt_link.py  protocol.py  k10_mqtt.py  ui_k10.py  feedback.py  config.py
+    font_ui48.bin  font_ui20.bin
     doorbell.wav  knock.wav  kettle.wav  fire.wav
 
 其中 `config.py` 由 `config.example.py` 复制填写（不进版本库），4 个 wav 由
@@ -34,7 +35,7 @@ def main():
         print("[k10] 缺少 config.py：请复制 config.example.py 并填写")
         return 1
 
-    _show("启动中…")
+    _show("BOOT")
 
     from feedback import Feedback
     from k10_mqtt import make_factory

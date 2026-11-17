@@ -112,3 +112,19 @@ python board\sim_board.py send --cls fire
 - `Gravity 有源蜂鸣器模块 3.3V`（或任意 3.3V 有源蜂鸣器模块）
 - `震动马达模块 带三极管驱动 3.3V`（不要买裸电机）
 - 3Pin PH2.0 转杜邦线（接 Gravity 口）
+
+## 9. 界面字体（上传清单）
+
+屏幕固定英文，使用 LVGL + 外置 ASCII 字库：
+
+| 文件 | 用途 | 大小 |
+|---|---|---|
+| `font_ui48.bin` | 48px 大字（`DOOR` / `KNOCK` / `KETTLE` / `FIRE`） | ~25 KB |
+| `font_ui20.bin` | 20px 状态与得分（`CLOUD` / `SCORE` / 时间） | ~5 KB |
+
+两个文件放板子**根目录**；缺了会自动退回内置字体（字小，但内容不变）。
+重新生成：`python tools/make_board_fonts.py`（需要 `lv_font_conv` 与一个中文字体文件，
+默认用 Windows 黑体）。
+
+> 界面语言由 D-24 定案为英文：官方固件内置字体没有中文字形，`screen.draw_text`
+> 的 `font_size` 也不受控，中文会乱码且字很小。
