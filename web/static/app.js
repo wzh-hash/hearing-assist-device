@@ -1278,6 +1278,13 @@
         '</dl>' +
       '</section>' +
       '<section class="section">' +
+        '<h3 class="section__title">数据图</h3>' +
+        '<figure class="viz"><canvas id="viz-wave"></canvas><figcaption><span>波形</span><span>振幅</span></figcaption></figure>' +
+        '<figure class="viz"><canvas id="viz-mel"></canvas><figcaption><span>对数梅尔谱</span><span>低频在下，高频在上</span></figcaption></figure>' +
+        '<figure class="viz"><canvas id="viz-trace"></canvas><figcaption><span>事件内得分轨迹</span><span></span></figcaption></figure>' +
+        '<p class="viz__note" id="viz-note" hidden></p>' +
+      '</section>' +
+      '<section class="section">' +
         '<h3 class="section__title">声学指标</h3>' +
         '<dl class="kv">' +
           metrics.map(function (pair) {
@@ -1297,9 +1304,12 @@
       '<section class="section">' +
         '<h3 class="section__title">模板得分</h3>' +
         (tplScores.length
-          ? '<dl class="kv">' + tplScores.map(function (pair) {
-              return '<dt>' + esc(pair[0]) + '</dt><dd>' + num(pair[1], 2) + '</dd>';
-            }).join('') + '</dl>'
+          ? '<div class="bars">' + tplScores.map(function (pair) {
+              const value = clamp(Number(pair[1]) || 0, 0, 1);
+              return '<div class="bar"><span class="bar__k">' + esc(pair[0]) + '</span>' +
+                '<span class="bar__t"><i style="width:' + (value * 100).toFixed(1) + '%"></i></span>' +
+                '<span class="bar__v">' + num(value, 2) + '</span></div>';
+            }).join('') + '</div>'
           : '<p class="field__hint">没有模板得分记录。</p>') +
       '</section>' +
       '<section class="section">' +
@@ -1309,6 +1319,213 @@
             '<p style="margin-top:10px"><a class="link" href="' + esc(API_BASE + event.wav) + '" download>下载录音</a></p>'
           : '<p class="field__hint">' + (IS_MOCK ? '模拟数据没有录音文件。' : '这次判定没有保存录音。') + '</p>') +
       '</section>';
+
+    loadEventData(event);
+  }
+
+  function showVizNote(node, text) {
+    if (!node) return;
+    node.textContent = text;
+    node.hidden = false;
+  }
+
+  function prepareCanvas(canvas, cssHeight) {
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(140, Math.round(rect.width || 300));
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(cssHeight * dpr);
+    canvas.style.height = cssHeight + 'px';
+    const ctx = canvas.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, width, cssHeight);
+    ctx.font = '10px "Microsoft YaHei UI", "PingFang SC", "Noto Sans CJK SC", sans-serif';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+    return { ctx: ctx, width: width, height: cssHeight };
+  }
+
+  function drawWaveform(canvas, data) {
+    const prepared = prepareCanvas(canvas, 84);
+    const ctx = prepared.ctx;
+    const width = prepared.width;
+    const height = prepared.height;
+    const mid = height / 2;
+    ctx.strokeStyle = '#C9CFC9';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, mid + 0.5);
+    ctx.lineTo(width, mid + 0.5);
+    ctx.stroke();
+
+    const points = Array.isArray(data.waveform) ? data.waveform : [];
+    if (points.length) {
+      const step = width / points.length;
+      const scale = mid - 6;
+      ctx.strokeStyle = '#141B18';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      points.forEach(function (pair, index) {
+        const x = index * step + step / 2;
+        const high = mid - clamp(Number(pair[1]) || 0, -1, 1) * scale;
+        const low = mid - clamp(Number(pair[0]) || 0, -1, 1) * scale;
+        ctx.moveTo(x, high);
+        ctx.lineTo(x, Math.max(high + 1, low));
+      });
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = '#5F6A64';
+    ctx.fillText('0', 2, height - 7);
+    const label = (Number(data.duration) || 0).toFixed(2) + ' s';
+    ctx.textAlign = 'right';
+    ctx.fillText(label, width - 2, height - 7);
+    ctx.textAlign = 'left';
+  }
+
+  function drawMel(canvas, data) {
+    const prepared = prepareCanvas(canvas, 140);
+    const ctx = prepared.ctx;
+    const width = prepared.width;
+    const height = prepared.height;
+    const mel = Array.isArray(data.mel) ? data.mel : [];
+    const rows = mel.length;
+    const cols = rows && Array.isArray(mel[0]) ? mel[0].length : 0;
+    if (!rows || !cols) return;
+
+    const cellW = width / cols;
+    const cellH = height / rows;
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < cols; col += 1) {
+        const value = clamp(Number(mel[row][col]) || 0, 0, 1);
+        const alpha = (0.04 + value * 0.92).toFixed(3);
+        ctx.fillStyle = 'rgba(20, 27, 24, ' + alpha + ')';
+        const y = height - (row + 1) * cellH;
+        ctx.fillRect(col * cellW, y, cellW + 0.5, cellH + 0.5);
+      }
+    }
+
+    ctx.strokeStyle = '#C9CFC9';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0.5, 0.5, width - 1, height - 1);
+    ctx.fillStyle = '#5F6A64';
+    ctx.fillText('0', 3, height - 8);
+    ctx.fillText('8k', 3, 10);
+    ctx.textAlign = 'right';
+    ctx.fillText((Number(data.duration) || 0).toFixed(2) + ' s', width - 3, height - 8);
+    ctx.textAlign = 'left';
+  }
+
+  function drawTrace(canvas, event) {
+    const prepared = prepareCanvas(canvas, 112);
+    const ctx = prepared.ctx;
+    const width = prepared.width;
+    const height = prepared.height;
+    const left = 24;
+    const right = 8;
+    const top = 10;
+    const bottom = 18;
+    const plotW = width - left - right;
+    const plotH = height - top - bottom;
+
+    ctx.strokeStyle = '#C9CFC9';
+    ctx.lineWidth = 1;
+    ctx.fillStyle = '#5F6A64';
+    [0, 0.5, 1].forEach(function (value) {
+      const y = top + (1 - value) * plotH;
+      ctx.beginPath();
+      ctx.moveTo(left, y + 0.5);
+      ctx.lineTo(left + plotW, y + 0.5);
+      ctx.stroke();
+      ctx.fillText(value.toFixed(1), 2, y);
+    });
+
+    const points = Array.isArray(event.trace_points) ? event.trace_points : [];
+    if (!points.length) {
+      ctx.fillStyle = '#5F6A64';
+      ctx.fillText('这次判定没有得分轨迹', left + 4, top + plotH / 2);
+      return;
+    }
+
+    const last = points[points.length - 1];
+    const duration = Math.max(Number(event.dur) || 0, Number(last[0]) || 0, 0.1);
+    const px = function (seconds) { return left + (seconds / duration) * plotW; };
+    const py = function (score) { return top + (1 - clamp(score, 0, 1)) * plotH; };
+
+    const threshold = Number(event.threshold);
+    if (isFinite(threshold)) {
+      ctx.strokeStyle = '#8A5A00';
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      ctx.moveTo(left, py(threshold));
+      ctx.lineTo(left + plotW, py(threshold));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = '#8A5A00';
+      ctx.fillText('阈值 ' + threshold.toFixed(2), left + 4, py(threshold) - 8);
+    }
+
+    ctx.strokeStyle = '#141B18';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    points.forEach(function (point, index) {
+      const x = px(Number(point[0]) || 0);
+      const y = py(Number(point[1]) || 0);
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    ctx.fillStyle = '#141B18';
+    points.forEach(function (point) {
+      ctx.beginPath();
+      ctx.arc(px(Number(point[0]) || 0), py(Number(point[1]) || 0), 1.8, 0, Math.PI * 2);
+      ctx.fill();
+    });
+
+    ctx.fillStyle = '#5F6A64';
+    ctx.fillText('0', left, height - 6);
+    ctx.textAlign = 'right';
+    ctx.fillText(duration.toFixed(2) + ' s', left + plotW, height - 6);
+    ctx.textAlign = 'left';
+  }
+
+  function loadEventData(event) {
+    const note = document.getElementById('viz-note');
+    const waveCanvas = document.getElementById('viz-wave');
+    const melCanvas = document.getElementById('viz-mel');
+    const traceCanvas = document.getElementById('viz-trace');
+    if (!waveCanvas || !melCanvas || !traceCanvas) return;
+
+    requestAnimationFrame(function () {
+      if (S.view === 'event' && S.viewData &&
+          String(S.viewData.seq) === String(event.seq)) {
+        drawTrace(traceCanvas, event);
+      }
+    });
+
+    if (IS_MOCK) {
+      showVizNote(note, '模拟数据没有录音数据图；真实服务会按事件录音画波形与对数梅尔谱。');
+      return;
+    }
+
+    bus.request('/api/events/' + encodeURIComponent(event.seq) + '/analysis')
+      .then(function (data) {
+        if (S.view !== 'event' || !S.viewData ||
+            String(S.viewData.seq) !== String(event.seq)) return;
+        drawWaveform(waveCanvas, data);
+        drawMel(melCanvas, data);
+        if (note) note.hidden = true;
+      })
+      .catch(function (err) {
+        if (err && err.status === 401) {
+          showGate();
+          return;
+        }
+        showVizNote(note, err && err.status === 404
+          ? '这次判定没有录音，无法绘图。'
+          : '数据图暂时不可用（预览服务不含分析接口）。');
+      });
   }
 
   function updateDrawerLive(snapshot) {

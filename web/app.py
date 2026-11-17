@@ -201,7 +201,9 @@ class App:
         return {"inputs": inputs, "outputs": outputs}
 
     def refresh_templates(self, *, initial: bool = False) -> None:
-        refs = R.learned_refs()
+        learned = sorted(glob.glob(os.path.join(R.SOUND_DIR, "learned_*.wav")))
+        # 只演示实际门铃的那一个模板：有学习结果就不再叠加内置四类参考。
+        refs = learned if learned else R.learned_refs()
         templates: list = []
         try:
             templates = R.build_templates(refs)
@@ -221,7 +223,13 @@ class App:
 
         if initial:
             if self.template_names:
-                self.log(f"已加载 {len(self.template_names)} 个模板（内置门铃/敲门/水壶/火警可直接使用）")
+                if learned:
+                    self.log(
+                        "已加载 %d 个学习模板（%s），只使用这些模板"
+                        % (len(self.template_names), "、".join(self.template_names))
+                    )
+                else:
+                    self.log(f"已加载 {len(self.template_names)} 个模板（内置门铃/敲门/水壶/火警可直接使用）")
             else:
                 self.log("没有可用模板：请先学习门铃")
         else:
@@ -257,11 +265,71 @@ class App:
         while not self._ticker_stop.is_set():
             try:
                 self.bus.expire()
+                self._follow_demo_display()
                 self._refresh_iot()
                 self.bus.broadcast_state()
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
             self._ticker_stop.wait(0.125)
+
+    def _follow_demo_display(self) -> None:
+        """试听演示的大字跟随音频的真实有声区间，不在静音尾/间隙里硬撑。"""
+        playing = self.bus.playing
+        if not playing or playing.get("test"):
+            return
+        if playing.get("cls") not in R.EVENT_CLASSES:
+            return
+        active = playing.get("active") or []
+        start = int(playing.get("start") or 0)
+        if not active or not start:
+            return
+        last = self.bus.last_hit
+        if not last or int(last.get("ts") or 0) < start:
+            return
+        elapsed = int(time.time() * 1000) - start
+        if not any(int(begin) <= elapsed <= int(end) for begin, end in active):
+            return
+        if self.bus.hit is not None:
+            self.bus.extend_hit(350, max_total_ms=12000)
+        else:
+            self.bus.reshow_last_hit()
+
+    def _active_intervals(self, path: str, block_ms: int = 50) -> list[list[int]]:
+        """音频里的有声区间（ms），用于试听时让大字跟着声音而不是文件长度。"""
+        try:
+            audio, rate = R.load_wav(path)
+        except Exception:  # noqa: BLE001
+            return []
+        audio = np.asarray(R.to_16k(audio, rate), dtype=np.float32)
+        if audio.size == 0:
+            return []
+        block = max(1, int(R.SR * block_ms / 1000))
+        levels: list[float] = []
+        for start in range(0, len(audio), block):
+            chunk = audio[start:start + block].astype(np.float64)
+            levels.append(float(10 * np.log10(np.mean(chunk ** 2) + 1e-12)))
+        if not levels:
+            return []
+        floor = float(np.percentile(levels, 20))
+        gate = floor + float(self.config.get("gate_db") or 8)
+        raw: list[list[int]] = []
+        active_start: int | None = None
+        for index, level in enumerate(levels):
+            if level > gate and active_start is None:
+                active_start = index
+            elif level <= gate and active_start is not None:
+                raw.append([active_start * block_ms, index * block_ms])
+                active_start = None
+        if active_start is not None:
+            raw.append([active_start * block_ms, len(levels) * block_ms])
+
+        merged: list[list[int]] = []
+        for begin, end in raw:
+            if merged and begin - merged[-1][1] <= 250:
+                merged[-1][1] = end
+            else:
+                merged.append([begin, end])
+        return [[int(begin), int(end)] for begin, end in merged if end - begin >= 120]
 
     def _refresh_iot(self) -> None:
         snap = self.iot_link.snapshot()
@@ -390,6 +458,13 @@ class App:
                     detector.reset()
                     suppressed = False
                 events = detector.process(block)
+                level = detector.level
+                gate = detector.floor + float(detector.gate_db)
+                above = level > gate
+                if above and self.bus.hit is not None:
+                    # 只在声音仍然存在时顺延；声音一停，约 0.4 秒后消失。
+                    # 不在这里重亮上一次命中：那会把“别的声响”显示成旧类别。
+                    self.bus.extend_hit(400, max_total_ms=12000)
                 self.bus.set_level(detector.level, detector.floor)
                 for event in events:
                     self._handle_event(event, detector, demo=False)
@@ -468,9 +543,15 @@ class App:
                 snr = None
 
         trace_points = event.get("trace") or []
-        if trace_points:
-            best = max(trace_points, key=lambda point: float(point[1]))
-            trace = {"score": round(float(best[1]), 2), "at": round(float(best[0]), 2)}
+        trace_series: list[list] = []
+        for point in trace_points:
+            try:
+                trace_series.append([round(float(point[0]), 2), round(float(point[1]), 2)])
+            except (TypeError, ValueError, IndexError):
+                continue
+        if trace_series:
+            best = max(trace_series, key=lambda item: item[1])
+            trace = {"score": best[1], "at": best[0]}
         else:
             trace = {"score": round(score, 2), "at": round(dur, 2)}
 
@@ -513,6 +594,8 @@ class App:
             "peak_db": peak_db,
             "snr": snr,
             "trace": trace,
+            "trace_points": trace_series,
+            "threshold": round(float(self.config["threshold"]), 2),
             "tpl_scores": tpl_scores,
             "reason": reason,
             "demo": bool(demo),
@@ -582,6 +665,80 @@ class App:
             return float(10 * np.log10(np.mean(np.asarray(block, dtype=np.float64) ** 2) + 1e-12))
         except Exception:  # noqa: BLE001
             return -120.0
+
+    # ------------------------------------------------------------------
+    # 事件数据图（波形 / 对数梅尔谱）
+    # ------------------------------------------------------------------
+
+    def event_analysis(self, seq: int) -> dict:
+        """从该次判定录音生成波形包络与对数梅尔谱（按需，不常驻）。"""
+        event = self.bus.find_event(seq)
+        if not event:
+            raise ApiError("事件不存在", 404)
+        name = event.get("wav_file")
+        if not name:
+            raise ApiError("这次判定没有录音", 404)
+        path = self.bus.recording_path(name)
+        if path is None:
+            raise ApiError("录音不存在或已清空", 404)
+
+        try:
+            audio, rate = R.load_wav(str(path))
+        except Exception as exc:  # noqa: BLE001
+            raise ApiError(f"录音读取失败：{exc}", 500) from None
+        audio = np.asarray(audio, dtype=np.float32)
+        if audio.size < int(0.05 * R.SR):
+            raise ApiError("录音太短，无法绘图", 422)
+        rate = int(rate or R.SR)
+        duration = len(audio) / float(rate)
+
+        bins = 240
+        step = max(1, len(audio) // bins)
+        waveform = []
+        for start in range(0, len(audio), step):
+            chunk = audio[start:start + step]
+            if chunk.size:
+                waveform.append([round(float(chunk.min()), 3), round(float(chunk.max()), 3)])
+            if len(waveform) >= bins:
+                break
+
+        try:
+            mel = R.logmel(audio)  # (帧数, 64)
+        except Exception as exc:  # noqa: BLE001
+            raise ApiError(f"梅尔谱计算失败：{exc}", 500) from None
+        frames, bands = mel.shape
+        if frames < 1 or bands < 1:
+            raise ApiError("录音太短，无法绘图", 422)
+
+        cols = min(120, max(1, frames))
+        step_frames = max(1, frames // cols)
+        rows = min(64, bands)
+        matrix: list[list[float]] = []
+        for band in range(rows):
+            row = []
+            for column in range(cols):
+                chunk = mel[column * step_frames:(column + 1) * step_frames, band]
+                row.append(float(chunk.mean()) if getattr(chunk, "size", 0) else -100.0)
+            matrix.append(row)
+
+        flat = np.asarray(matrix, dtype=np.float64)
+        low = float(np.percentile(flat, 5))
+        high = float(np.percentile(flat, 95))
+        if high - low < 1e-6:
+            high = low + 1e-6
+        normalized = [
+            [round(max(0.0, min(1.0, (value - low) / (high - low))), 3) for value in row]
+            for row in matrix
+        ]
+
+        return {
+            "duration": round(duration, 2),
+            "sample_rate": rate,
+            "waveform": waveform,
+            "mel": normalized,
+            "rows": rows,
+            "cols": cols,
+        }
 
     # ------------------------------------------------------------------
     # 学习
@@ -782,7 +939,8 @@ class App:
             raise ApiError("缺少试听音频文件", 404)
 
         duration = wav_duration(path)
-        self._begin_playback(cls, label, test=False, duration=duration)
+        active = self._active_intervals(path)
+        self._begin_playback(cls, label, test=False, duration=duration, active=active)
         threading.Thread(
             target=self.audio.play,
             args=(path, float(R.PLAY_GAIN.get(cls, 1.0)), index),
@@ -793,7 +951,8 @@ class App:
         timer.start()
         return {"ok": True}
 
-    def _begin_playback(self, cls: str, label: str, *, test: bool, duration: float) -> None:
+    def _begin_playback(self, cls: str, label: str, *, test: bool, duration: float,
+                        active: list[list[int]] | None = None) -> None:
         now = time.time()
         until = int((now + duration + 0.2) * 1000)
         self._playing_until = now + duration
@@ -803,6 +962,8 @@ class App:
             "label": label,
             "test": bool(test),
             "until": until,
+            "start": int(now * 1000),
+            "active": active or [],
         })
 
     def _record_demo(self, cls: str) -> None:

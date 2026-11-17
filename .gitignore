@@ -20,3 +20,6 @@ sounds/live_diag/
 sounds/test_live/
 sounds/redl/
 sounds/candidates/
+
+# 学习模板备份（用户数据，不入库）
+sounds/backup_before_learn_*/

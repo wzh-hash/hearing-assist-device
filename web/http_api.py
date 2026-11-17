@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -176,6 +177,13 @@ class Handler(BaseHTTPRequestHandler):
                 except ValueError:
                     raise ApiError("分页参数不合法")
                 self.send_json(200, self.app.bus.list_events(before, limit))
+                return
+
+            analysis = re.match(r"^/api/events/(\d+)/analysis$", path)
+            if analysis:
+                if not self.require_auth():
+                    return
+                self.send_json(200, self.app.event_analysis(int(analysis.group(1))))
                 return
 
             if path == "/api/export.csv":

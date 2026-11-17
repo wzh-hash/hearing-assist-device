@@ -23,7 +23,7 @@ from urllib.parse import quote
 MAX_EVENTS = 300
 MAX_LOGS = 300
 SUBSCRIBER_QUEUE = 128
-HIT_DISPLAY_MS = 3500
+HIT_DISPLAY_MS = 1500
 ENV_WINDOW_SEC = 2.0
 
 
@@ -166,6 +166,42 @@ class StateBus:
                 self.logs.pop(0)
         self.publish("log", entry)
         return entry
+
+    def find_event(self, seq: int) -> dict | None:
+        with self.lock:
+            for event in self.events:
+                if int(event.get("seq", -1)) == int(seq):
+                    return dict(event)
+        return None
+
+    def extend_hit(self, extra_ms: int = 400, max_total_ms: int = 12000) -> None:
+        """声音仍在持续时顺延大字展示；不新增事件、不上报、不进 CSV。"""
+        with self.lock:
+            if self.hit is None:
+                return
+            now = _now_ms()
+            until = max(int(self.hit.get("until") or 0), now + max(100, int(extra_ms)))
+            cap = int(self.hit.get("ts") or now) + max(HIT_DISPLAY_MS, int(max_total_ms))
+            self.hit["until"] = min(until, cap)
+
+    def reshow_last_hit(self) -> bool:
+        """8 秒冷却内同一来源再次响起：只刷新大字，不新增事件。
+
+        门铃的“叮—咚”、火警的两段、水壶的间歇都可能落在同一次判定之后；
+        识别侧仍按全局 8 秒冷却抑制重复事件，这里只把上次大字重新点亮。
+        """
+        with self.lock:
+            if self.hit is not None or self.last_hit is None:
+                return False
+            now = _now_ms()
+            ts = int(self.last_hit.get("ts") or 0)
+            if ts <= 0 or now - ts > 8000:
+                return False
+            self.hit = dict(self.last_hit)
+            self.hit["until"] = now + HIT_DISPLAY_MS
+            self.mode = "hit"
+            self.heard_until = 0.0
+            return True
 
     def stats(self) -> dict:
         with self.lock:
