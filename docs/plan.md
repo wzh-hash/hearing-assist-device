@@ -57,8 +57,8 @@ web/static/style.css      大字区 / 事件流 / 响应式
 board/main.py             K10 入口：连 WiFi + 订阅 + 主循环
 board/mqtt_link.py        连接/载荷/心跳（与板子无关，可复用）
 board/ui_k10.py           屏 / 喇叭 / 3 颗 WS2812
-board/fonts/font_ui48.bin 48px ASCII 字库（LVGL）
-board/fonts/font_ui20.bin 20px ASCII 字库（LVGL）
+board/fonts/font_msg48.bin 48px 粗体 ASCII 字库（LVGL，消息）
+board/fonts/font_meta18.bin 18px 常规 ASCII 字库（LVGL，状态）
 board/feedback.py         外接蜂鸣器 / 震动马达的节奏（可选）
 board/sim_board.py        本机模拟板子（第二订阅者，验收 AC-IOT-7）
 run_gui.bat               改为启动 pc_web.py

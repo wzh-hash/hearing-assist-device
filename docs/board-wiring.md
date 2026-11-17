@@ -119,8 +119,8 @@ python board\sim_board.py send --cls fire
 
 | 文件 | 用途 | 大小 |
 |---|---|---|
-| `font_ui48.bin` | 48px 大字（`DOOR` / `KNOCK` / `KETTLE` / `FIRE`） | ~25 KB |
-| `font_ui20.bin` | 20px 状态与得分（`CLOUD` / `SCORE` / 时间） | ~5 KB |
+| `font_msg48.bin` | 48px 粗体大字（`DOOR` / `KNOCK` / `KETTLE` / `FIRE`） | ~37 KB |
+| `font_meta18.bin` | 18px 状态与时间（`CLOUD` / `DEMO`） | ~6 KB |
 
 两个文件放板子**根目录**；缺了会自动退回内置字体（字小，但内容不变）。
 重新生成：`python tools/make_board_fonts.py`（需要 `lv_font_conv` 与一个中文字体文件，

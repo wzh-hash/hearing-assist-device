@@ -1,26 +1,25 @@
-"""K10 界面：LVGL 标签 + 外置英文字库（48px / 20px）+ 3 颗 WS2812 + WAV。
+"""K10 界面：信号灯牌（Signal Board）。
 
-界面**只用英文**（DOOR / KNOCK / KETTLE / FIRE、CLOUD、WAIT…），不依赖中文字形；
-K10 官方 MicroPython 固件内置字体不含中文、`screen.draw_text` 字号也不受控（D-24）。
+设计原则
+--------
+- **一个词**：整块屏只回答"发生了什么"——`DOOR` / `KNOCK` / `KETTLE` / `FIRE`。
+- **一种颜色**：颜色只表达等级，不表达类别（D-25）：
+  L1 蓝 `#2F80ED` / L2 黄 `#F2C94C` / L3 红 `#EB5757`。
+  门铃与敲门同为 L1，因此同色；类别靠文字与蜂鸣节奏区分。
+- **第二维度是节奏**：L1 常亮、L2 呼吸一次、L3 连闪（5 秒后停在常亮）。
+- **其余全部退灰**：状态、时间、边角标记只用灰阶，不抢主色。
+- 不显示得分、延迟、设备名、底部提示。
 
-字库由 `tools/make_board_fonts.py` 生成（只含 ASCII），放在板子根目录；
-**buffer 必须一直被引用**，LVGL 不拷贝字库数据。
+布局（240×320）
+---------------
+    ● CLOUD                 15:42:03
+                  DOOR
+                 [ L2 ]
+                                    DEMO
 
-    data = open("font_ui48.bin", "rb").read()
-    font = lv.binfont_create_from_buffer(data, len(data))
-    label.set_style_text_font(font, 0)
-
-三层降级：
-1. 正常：LVGL + 48px/20px 字库；
-2. 字库缺失：LVGL 内置字体（字小，但内容不变）；
-3. LVGL 不可用：退回 `screen.draw_text`（纯 ASCII 小字）。
-
-屏幕布局（240×320，无底部提示行）：
-
-    ● CLOUD                k10-01
-    15:42:03              DEMO
-              DOOR
-    [L2]    SCORE 0.80 · 0.42s
+字体：`font_msg48.bin`（Arial Bold 48，消息）/ `font_meta18.bin`（Arial 18，状态）。
+字库只含 ASCII，用 LVGL 从内存加载（buffer 保活）；缺字库回退内置字体，
+LVGL 不可用时回退 `screen.draw_text`。
 """
 
 import time
@@ -51,15 +50,10 @@ except Exception:
     speaker = None
 
 
-FONT_BIG_FILE = "font_ui48.bin"
-FONT_SMALL_FILE = "font_ui20.bin"
+FONT_MSG_FILE = "font_msg48.bin"
+FONT_META_FILE = "font_meta18.bin"
 
-COLORS = {
-    "doorbell": 0x3399FF,  # 蓝
-    "knock": 0xFFFFFF,     # 白
-    "kettle": 0xFFCC00,    # 黄
-    "fire": 0xFF2200,      # 红
-}
+#: 等级 → 颜色（唯一色相来源）
 TIER_COLORS = {"L1": 0x2F80ED, "L2": 0xF2C94C, "L3": 0xEB5757}
 TEXTS_SHORT = {"doorbell": "DOOR", "knock": "KNOCK", "kettle": "KETTLE", "fire": "FIRE"}
 SOUND_FILES = {
@@ -69,8 +63,16 @@ SOUND_FILES = {
     "fire": "fire.wav",
 }
 
+BG = 0x000000
+META = 0x8A8A8A
+META_DIM = 0x555555
+ONLINE_DOT = 0x8A8A8A
+OFFLINE_DOT = 0xEB5757
+
 BLINK_MS = 400
 BLINK_TOTAL_MS = 5000
+BREATH_AT_MS = 700
+BREATH_OFF_MS = 300
 
 
 def _now_ms():
@@ -94,29 +96,32 @@ def _hms(ts, tz_hours):
     return "%02d:%02d:%02d" % (seconds // 3600, (seconds % 3600) // 60, seconds % 60)
 
 
+def _luminance(hex_color):
+    red = (hex_color >> 16) & 0xFF
+    green = (hex_color >> 8) & 0xFF
+    blue = hex_color & 0xFF
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
 class K10Ui:
     """板子界面。`show(event)` 一次把屏、灯、声音、提醒全部换掉。"""
 
     def __init__(
         self,
-        show_chinese=True,
+        show_chinese=True,  # 兼容旧参数；界面固定英文
         feedback=None,
         tz_offset_hours=8,
-        device_name="k10-01",
+        device_name="k10-01",  # 兼容旧参数；界面不再显示设备名
         log=print,
     ):
         self._log = log
-        self._show_chinese = show_chinese
         self._feedback = feedback
         self._tz = tz_offset_hours
-        self._device_name = device_name
         self._last_event = None
         self._cloud = False
-        self._blink_until = 0
-        self._blink_at = 0
-        self._blink_on = False
-        self._error_logged = False
+        self._motion = None
         self._font_buffers = []
+        self._error_logged = False
 
         self._mode = "none"
         if lv is not None and screen is not None:
@@ -139,6 +144,7 @@ class K10Ui:
         if rgb is not None:
             try:
                 rgb.brightness(9)
+                rgb.write(color=0x000000)
             except Exception:
                 pass
         self._draw_idle()
@@ -162,23 +168,23 @@ class K10Ui:
     def _init_lvgl(self):
         screen.init(dir=2)
         self._scrn = lv.screen_active() if hasattr(lv, "screen_active") else lv.scr_act()
-        self._scrn.set_style_bg_color(lv.color_hex(0x000000), 0)
+        self._scrn.set_style_bg_color(lv.color_hex(BG), 0)
 
         self._fonts_ok = False
         try:
-            self._font_big = self._load_font(FONT_BIG_FILE)
-            self._font_small = self._load_font(FONT_SMALL_FILE)
+            self._font_msg = self._load_font(FONT_MSG_FILE)
+            self._font_meta = self._load_font(FONT_META_FILE)
             self._fonts_ok = True
         except Exception as exc:  # noqa: BLE001
-            self._log("字库不可用（%s），改用内置字体的英文短码" % exc)
-            self._font_big = getattr(lv, "font_k10_24", None) or lv.font_montserrat_24
-            self._font_small = getattr(lv, "font_k10_16", None) or lv.font_montserrat_16
+            self._log("字库不可用（%s），改用内置字体" % exc)
+            self._font_msg = getattr(lv, "font_k10_24", None) or lv.font_montserrat_24
+            self._font_meta = getattr(lv, "font_k10_16", None) or lv.font_montserrat_16
 
         self._dot = None
         try:
             self._dot = lv.obj(self._scrn)
             self._dot.set_size(10, 10)
-            self._dot.set_style_bg_color(lv.color_hex(0xEB5757), 0)
+            self._dot.set_style_bg_color(lv.color_hex(OFFLINE_DOT), 0)
             self._dot.set_style_border_width(0, 0)
             self._dot.set_style_radius(5, 0)
             self._dot.set_style_pad_all(0, 0)
@@ -186,17 +192,11 @@ class K10Ui:
         except Exception:
             self._dot = None
 
-        self._status = self._label(self._font_small, 0xFFFFFF, lv.ALIGN.TOP_LEFT, 24, 6)
-        self._device = self._label(self._font_small, 0x8899AA, lv.ALIGN.TOP_RIGHT, -8, 6)
-        self._time = self._label(self._font_small, 0x8899AA, lv.ALIGN.TOP_LEFT, 10, 38)
-        self._demo = self._label(self._font_small, 0xE67E22, lv.ALIGN.TOP_RIGHT, -10, 34)
-        self._big = self._label(self._font_big, 0xFFFFFF, lv.ALIGN.CENTER, 0, -50)
-        self._short = self._label(self._font_small, 0x667788, lv.ALIGN.CENTER, 0, 20)
-        self._tier = self._label(self._font_small, 0xFFFFFF, lv.ALIGN.BOTTOM_LEFT, 10, -40)
-        self._badge(self._tier, 0x2F80ED)
-        self._detail = self._label(self._font_small, 0xCCCCCC, lv.ALIGN.BOTTOM_LEFT, 78, -46)
-
-        self._set_text(self._device, self._device_name)
+        self._status = self._label(self._font_meta, META, lv.ALIGN.TOP_LEFT, 24, 5)
+        self._time = self._label(self._font_meta, META, lv.ALIGN.TOP_RIGHT, -10, 5)
+        self._msg = self._label(self._font_msg, 0xFFFFFF, lv.ALIGN.CENTER, 0, -20)
+        self._tier = self._label(self._font_meta, 0xFFFFFF, lv.ALIGN.CENTER, 0, 55)
+        self._demo = self._label(self._font_meta, META_DIM, lv.ALIGN.BOTTOM_RIGHT, -10, -10)
 
     def _label(self, font, color, align, x, y):
         label = lv.label(self._scrn)
@@ -207,10 +207,11 @@ class K10Ui:
 
     def _badge(self, label, color):
         try:
-            label.set_style_bg_color(lv.color_hex(color), 0)
-            label.set_style_bg_opa(lv.OPA.COVER, 0)
-            label.set_style_pad_all(4, 0)
-            label.set_style_radius(4, 0)
+            label.set_style_text_color(lv.color_hex(color), 0)
+            label.set_style_border_color(lv.color_hex(color), 0)
+            label.set_style_border_width(2, 0)
+            label.set_style_radius(3, 0)
+            label.set_style_pad_all(6, 0)
         except Exception:
             pass
 
@@ -218,58 +219,92 @@ class K10Ui:
 
     def show(self, event):
         self._last_event = event
-        cls = event.get("cls", "")
-        if self._mode == "lvgl":
-            self._show_lvgl(event)
-        else:
-            self._show_canvas(event)
-        self._rgb(COLORS.get(cls, 0xFFFFFF))
-        self._play(cls)
+        tier, color = self._render(event)
+        self._start_motion(tier, color)
+        self._play(event.get("cls", ""))
         if self._feedback is not None:
             try:
-                self._feedback.play(cls)
+                self._feedback.play(event.get("cls", ""))
             except Exception as exc:
                 self._log("提醒节奏失败：%s" % exc)
-        if cls == "fire":
-            self._blink_until = _now_ms() + BLINK_TOTAL_MS
-            self._blink_at = 0
-            self._blink_on = True
+
+    def _render(self, event):
+        """只更新屏幕内容，不触发声音/提醒（重连恢复时复用）。"""
+        cls = event.get("cls", "")
+        tier = event.get("tier") or "L1"
+        color = TIER_COLORS.get(tier, TIER_COLORS["L1"])
+        text = TEXTS_SHORT.get(cls, cls.upper())
+        with_demo = bool(event.get("demo"))
+
+        if self._mode == "lvgl":
+            self._set_text(self._msg, text)
+            self._set_color(self._msg, color)
+            self._set_text(self._tier, tier)
+            self._badge(self._tier, color)
+            self._set_text(self._demo, "DEMO" if with_demo else "")
+            self._set_text(self._time, _hms(event.get("ts"), self._tz))
+            self._set_status(True)
+        else:
+            self._show_canvas(text, tier, color, event, with_demo)
+        return tier, color
 
     def set_cloud(self, connected):
         self._cloud = bool(connected)
         if not connected:
+            self._motion = None
+            self._rgb(0x000000)
             self._draw_cloud_down()
-            self._rgb(0x220000)
             return
         if self._last_event is None:
             self._draw_idle()
         else:
-            self.show(self._last_event)
+            # 重连恢复：重画当前事件，但不重放声音与提醒
+            tier, color = self._render(self._last_event)
+            self._start_motion(tier, color)
 
     def tick(self):
-        now = _now_ms()
+        self._tick_motion(_now_ms())
         if self._feedback is not None:
             try:
-                self._feedback.tick(now)
+                self._feedback.tick()
             except Exception:
                 pass
-        if not self._blink_until:
+
+    # ---------- 等级动效 ----------
+
+    def _start_motion(self, tier, color):
+        now = _now_ms()
+        self._motion = {"tier": tier, "color": color, "now": now, "phase": 0}
+        self._rgb(color)
+        if tier == "L2":
+            self._motion.update(kind="breath", next=now + BREATH_AT_MS)
+        elif tier == "L3":
+            self._motion.update(kind="blink", on=True, next=now + BLINK_MS, stop=now + BLINK_TOTAL_MS)
+        else:
+            self._motion.update(kind="steady")
+
+    def _tick_motion(self, now):
+        motion = self._motion
+        if not motion:
             return
-        if now >= self._blink_until:
-            self._blink_until = 0
-            if self._blink_on:
-                self._blink_on = False
+        kind = motion.get("kind")
+        if kind == "breath":
+            if motion["phase"] == 0 and now >= motion["next"]:
                 self._rgb(0x000000)
-                if self._mode == "lvgl" and self._last_event is not None:
-                    self._set_color(self._big, COLORS.get(self._last_event.get("cls"), 0xFFFFFF))
-            return
-        if now - self._blink_at < BLINK_MS:
-            return
-        self._blink_at = now
-        self._blink_on = not self._blink_on
-        self._rgb(COLORS["fire"] if self._blink_on else 0x000000)
-        if self._mode == "lvgl":
-            self._set_color(self._big, COLORS["fire"] if self._blink_on else 0x330000)
+                motion["phase"] = 1
+                motion["next"] = now + BREATH_OFF_MS
+            elif motion["phase"] == 1 and now >= motion["next"]:
+                self._rgb(motion["color"])
+                motion["kind"] = "steady"
+        elif kind == "blink":
+            if now >= motion["stop"]:
+                self._rgb(motion["color"])
+                motion["kind"] = "steady"
+                return
+            if now >= motion["next"]:
+                motion["on"] = not motion["on"]
+                motion["next"] = now + BLINK_MS
+                self._rgb(motion["color"] if motion["on"] else 0x000000)
 
     # ---------- LVGL 绘制 ----------
 
@@ -287,89 +322,56 @@ class K10Ui:
         except Exception:
             pass
 
-    def _label_text(self, cls):
-        return TEXTS_SHORT.get(cls, cls.upper())
-
     def _set_status(self, online):
-        self._set_text(self._status, "CLOUD" if online else "LINK DOWN")
-        self._set_color(self._status, 0xFFFFFF if online else 0xFF6B6B)
+        self._set_text(self._status, "CLOUD" if online else "OFFLINE")
+        self._set_color(self._status, META if online else OFFLINE_DOT)
         try:
             if self._dot is not None:
-                self._dot.set_style_bg_color(lv.color_hex(0x2ECC71 if online else 0xEB5757), 0)
+                self._dot.set_style_bg_color(lv.color_hex(ONLINE_DOT if online else OFFLINE_DOT), 0)
         except Exception:
             pass
 
-    def _show_lvgl(self, event):
-        cls = event.get("cls", "")
-        tier = event.get("tier", "L2")
-        demo = bool(event.get("demo"))
-        color = COLORS.get(cls, 0xFFFFFF)
-
-        self._set_status(True)
-        self._set_text(self._time, _hms(event.get("ts"), self._tz))
-        self._set_text(self._demo, "DEMO" if demo else "")
-        self._set_text(self._big, self._label_text(cls))
-        self._set_color(self._big, color)
-        self._set_text(self._short, TEXTS_SHORT.get(cls, cls.upper()))
-        self._set_text(self._tier, tier)
-        self._badge(self._tier, TIER_COLORS.get(tier, 0x888888))
-        self._set_text(self._detail, self._detail_text(event))
-
-    def _detail_text(self, event):
-        parts = []
-        score = event.get("score")
-        if isinstance(score, (int, float)) and not isinstance(score, bool):
-            parts.append("SCORE %.2f" % float(score))
-        latency = event.get("latency")
-        if isinstance(latency, (int, float)) and not isinstance(latency, bool):
-            parts.append("%.2fs" % float(latency))
-        return " · ".join(parts)
-
     def _draw_idle(self):
+        self._motion = None
+        self._rgb(0x000000)
         if self._mode == "lvgl":
-            if self._last_event is None:
-                self._set_text(self._big, "WAIT")
-                self._set_color(self._big, 0xCCCCCC)
-                self._set_text(self._short, "")
-                self._set_text(self._detail, "")
-                self._set_text(self._demo, "")
-                self._set_text(self._time, "--:--:--")
-                self._set_text(self._tier, "")
+            self._set_text(self._msg, "WAIT")
+            self._set_color(self._msg, META)
+            self._set_text(self._tier, "")
+            self._set_text(self._demo, "")
+            self._set_text(self._time, "--:--:--")
             self._set_status(self._cloud)
             return
         if self._mode == "canvas":
             self._canvas_clear()
-            self._canvas_text("WAIT", 10, 100, 24, 0xCCCCCC)
-            self._canvas_text("CLOUD " + ("ON" if self._cloud else "OFF"), 10, 40, 16, 0x8899AA)
+            self._canvas_text("WAIT", 20, 120, 24, META)
+            self._canvas_text("CLOUD" if self._cloud else "OFFLINE", 10, 30, 16, META)
             self._canvas_flush()
 
     def _draw_cloud_down(self):
         if self._mode == "lvgl":
             self._set_status(False)
-            self._set_text(self._big, "LINK DOWN")
-            self._set_color(self._big, 0xEB5757)
-            self._set_text(self._short, "")
-            self._set_text(self._detail, "")
+            self._set_text(self._msg, "NO LINK")
+            self._set_color(self._msg, META)
             self._set_text(self._tier, "")
+            self._set_text(self._demo, "")
             return
         if self._mode == "canvas":
             self._canvas_clear()
-            self._canvas_text("LINK DOWN", 10, 100, 24, 0xEB5757)
+            self._canvas_text("NO LINK", 10, 120, 24, META)
+            self._canvas_text("OFFLINE", 10, 30, 16, OFFLINE_DOT)
             self._canvas_flush()
 
-    # ---------- canvas 降级（纯 ASCII，字号受限） ----------
+    # ---------- canvas 降级 ----------
 
-    def _show_canvas(self, event):
-        cls = event.get("cls", "")
-        tier = event.get("tier", "L2")
-        short = TEXTS_SHORT.get(cls, cls.upper())
+    def _show_canvas(self, text, tier, color, event, demo):
         self._canvas_clear()
-        self._canvas_text(short, 10, 90, 24, COLORS.get(cls, 0xFFFFFF))
-        self._canvas_text(tier + "  " + _hms(event.get("ts"), self._tz), 10, 140, 16, 0x8899AA)
-        detail = self._detail_text(event)
-        if detail:
-            self._canvas_text(detail, 10, 170, 16, 0xCCCCCC)
-        self._canvas_text("CLOUD ON", 10, 40, 16, 0x2ECC71)
+        self._canvas_text(text, 10, 110, 24, color)
+        self._canvas_text(tier, 10, 150, 16, color)
+        self._canvas_text(_hms(event.get("ts"), self._tz), 10, 180, 16, META)
+        self._canvas_text("CLOUD", 10, 30, 16, META)
+        if demo:
+            self._canvas_text("DEMO", 10, 210, 16, META_DIM)
         self._canvas_flush()
 
     def _canvas_text(self, text, x, y, size, color):
@@ -383,7 +385,7 @@ class K10Ui:
         try:
             if screen is not None:
                 screen.clear()
-                screen.show_bg(color=0x000000)
+                screen.show_bg(color=BG)
         except Exception:
             pass
 
