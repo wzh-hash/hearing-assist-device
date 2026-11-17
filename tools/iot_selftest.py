@@ -93,7 +93,7 @@ EVENT = {
     "score": 0.8,
     "latency": 0.42,
     "ts": 1763265600.0,
-    "demo": False,
+    "preview": False,
 }
 
 
@@ -200,10 +200,10 @@ class FakeWall:
 def test_payload() -> None:
     section("载荷")
     encoded = payload.encode_event(
-        cls="doorbell", tier="L2", score=0.8, latency=0.42, ts=1763265600.123, demo=False
+        cls="doorbell", tier="L2", score=0.8, latency=0.42, ts=1763265600.123, preview=False
     )
     obj = json.loads(encoded)
-    check("字段固定为七个", set(obj) == {"v", "cls", "tier", "score", "latency", "ts", "demo"}, sorted(obj))
+    check("字段固定为七个", set(obj) == {"v", "cls", "tier", "score", "latency", "ts", "preview"}, sorted(obj))
     check("不超过 1KB", len(encoded) <= payload.MAX_BYTES, len(encoded))
     check("短码 FIRE", payload.encode_event(cls="fire", tier="L3", score=0.9, latency=0.4, ts=1.0, fmt="short") == b"FIRE")
 
@@ -254,7 +254,7 @@ def test_settings() -> None:
 
         for name, patch in (
             ("两主题相同被拒", {"status_topic": "evt123"}),
-            ("自造路径被拒", {"event_topic": "demo/alert"}),
+            ("自造路径被拒", {"event_topic": "preview/alert"}),
             ("空地址被拒", {"host": "  "}),
             ("QoS 越界被拒", {"qos": 2}),
         ):
@@ -431,8 +431,12 @@ def test_apply_and_logging() -> None:
     wait_for(lambda: link.snapshot().sent == 1)
 
     link.apply(base_settings(host="127.0.0.1", event_topic="evt999"))
-    check("客户端重建", len(factory.clients) == 2, len(factory.clients))
-    check("新地址生效", factory.clients[1].connect_calls[-1][0] == "127.0.0.1")
+    check("客户端重建", wait_for(lambda: len(factory.clients) == 2), len(factory.clients))
+    check("新地址生效", wait_for(
+        lambda: len(factory.clients) > 1
+        and bool(factory.clients[1].connect_calls)
+        and factory.clients[1].connect_calls[-1][0] == "127.0.0.1"
+    ), factory.clients[1].connect_calls if len(factory.clients) > 1 else None)
     check("累计发送保留", link.snapshot().sent == 1, link.snapshot().sent)
     check("新主题生效", wait_for(lambda: link.snapshot().status is Status.CONNECTED))
 

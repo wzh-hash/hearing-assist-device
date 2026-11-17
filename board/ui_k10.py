@@ -196,7 +196,7 @@ class K10Ui:
         self._time = self._label(self._font_meta, META, lv.ALIGN.TOP_RIGHT, -10, 5)
         self._msg = self._label(self._font_msg, 0xFFFFFF, lv.ALIGN.CENTER, 0, -20)
         self._tier = self._label(self._font_meta, 0xFFFFFF, lv.ALIGN.CENTER, 0, 55)
-        self._demo = self._label(self._font_meta, META_DIM, lv.ALIGN.BOTTOM_RIGHT, -10, -10)
+        self._preview = self._label(self._font_meta, META_DIM, lv.ALIGN.BOTTOM_RIGHT, -10, -10)
 
     def _label(self, font, color, align, x, y):
         label = lv.label(self._scrn)
@@ -234,18 +234,18 @@ class K10Ui:
         tier = event.get("tier") or "L1"
         color = TIER_COLORS.get(tier, TIER_COLORS["L1"])
         text = TEXTS_SHORT.get(cls, cls.upper())
-        with_demo = bool(event.get("demo"))
+        with_preview = bool(event.get("preview"))
 
         if self._mode == "lvgl":
             self._set_text(self._msg, text)
             self._set_color(self._msg, color)
             self._set_text(self._tier, tier)
             self._badge(self._tier, color)
-            self._set_text(self._demo, "TEST" if with_demo else "")
+            self._set_text(self._preview, "TEST" if with_preview else "")
             self._set_text(self._time, _hms(event.get("ts"), self._tz))
             self._set_status(True)
         else:
-            self._show_canvas(text, tier, color, event, with_demo)
+            self._show_canvas(text, tier, color, event, with_preview)
         return tier, color
 
     def set_cloud(self, connected):
@@ -338,7 +338,7 @@ class K10Ui:
             self._set_text(self._msg, "WAIT")
             self._set_color(self._msg, META)
             self._set_text(self._tier, "")
-            self._set_text(self._demo, "")
+            self._set_text(self._preview, "")
             self._set_text(self._time, "--:--:--")
             self._set_status(self._cloud)
             return
@@ -354,7 +354,7 @@ class K10Ui:
             self._set_text(self._msg, "NO LINK")
             self._set_color(self._msg, META)
             self._set_text(self._tier, "")
-            self._set_text(self._demo, "")
+            self._set_text(self._preview, "")
             return
         if self._mode == "canvas":
             self._canvas_clear()
@@ -364,13 +364,13 @@ class K10Ui:
 
     # ---------- canvas 降级 ----------
 
-    def _show_canvas(self, text, tier, color, event, demo):
+    def _show_canvas(self, text, tier, color, event, preview):
         self._canvas_clear()
         self._canvas_text(text, 10, 110, 24, color)
         self._canvas_text(tier, 10, 150, 16, color)
         self._canvas_text(_hms(event.get("ts"), self._tz), 10, 180, 16, META)
         self._canvas_text("CLOUD", 10, 30, 16, META)
-        if demo:
+        if preview:
             self._canvas_text("TEST", 10, 210, 16, META_DIM)
         self._canvas_flush()
 

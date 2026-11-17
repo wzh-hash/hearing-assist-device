@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-门铃识别（单场景 demo，纯识别版，不含网络 / MQTT）
+门铃识别（单场景 preview，纯识别版，不含网络 / MQTT）
 
 做什么：
     电脑麦克风一直听 → 能量门控发现“像事件”的声音 → 截一段 → 和参考门铃做
@@ -1370,8 +1370,13 @@ def cmd_devices(_args):
 
 
 def _feed_detector(tpls, threshold, wav, pre: float = 1.2, post: float = 1.0,
-                   pre_wav: np.ndarray | None = None) -> list[dict]:
-    """把一段音频塞进 Detector（前面加静音），返回所有命中事件。"""
+                   pre_wav: np.ndarray | None = None,
+                   strict: bool = False) -> list[dict]:
+    """把一段音频塞进 Detector（前面加静音），返回所有命中事件。
+
+    strict=False 模拟「试听回放」（界面试听按钮）管线，strict=True 模拟麦克风监听，
+    两者判定规则不同，自检必须按各自管线分别验证。
+    """
     block = int(SR * BLOCK_SEC)
     parts = [np.zeros(int(pre * SR), dtype=np.float32)]
     if pre_wav is not None:
@@ -1380,7 +1385,7 @@ def _feed_detector(tpls, threshold, wav, pre: float = 1.2, post: float = 1.0,
     parts.append(wav.astype(np.float32))
     parts.append(np.zeros(int(post * SR), dtype=np.float32))
     y = np.concatenate(parts)
-    det = Detector(tpls, threshold=threshold, cooldown=0.0, strict=False)
+    det = Detector(tpls, threshold=threshold, cooldown=0.0, strict=strict)
     hits: list[dict] = []
     for i in range(0, len(y) - block + 1, block):
         for ev in det.process(y[i:i + block]):
@@ -1395,7 +1400,7 @@ def cmd_selftest(args):
     for t in tpls:
         print(f"  {os.path.basename(t.path):28s} {t.dur:5.2f}s  {t.mat.shape}")
 
-    print("\n== 四类事件（内置音频，应命中且类别正确）==")
+    print("\n== 四类事件（内置音频，试听回放管线；应命中且类别正确）==")
     ok_all = True
     for cls in ("doorbell", "knock", "kettle", "fire"):
         refs = builtin_refs(cls)
@@ -1414,7 +1419,7 @@ def cmd_selftest(args):
             ok_all = False
             print(f"  [MISS] {EVENT_CLASSES[cls]['label']:6s} 没有命中")
 
-    print("\n== 负样本（不应命中）==")
+    print("\n== 负样本（不应命中；按麦克风监听严格管线判定）==")
     n = int(2.6 * SR)
     t = np.arange(n) / SR
     rng = np.random.default_rng(7)
@@ -1431,16 +1436,26 @@ def cmd_selftest(args):
         "1kHz 纯音": (0.25 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32),
     }
     ok_neg = True
+    preview_fp: list[str] = []
     for name, wav in negs.items():
-        hits = _feed_detector(tpls, args.threshold, wav)
+        hits = _feed_detector(tpls, args.threshold, wav, strict=True)
         if hits:
             ok_neg = False
             ev = hits[0]
             print(f"  [!! 误报] {name:8s} → {ev['label']} conf={ev['conf']:.2f}")
         else:
             print(f"  [OK ] {name:8s} 未命中")
+        preview_hits = _feed_detector(tpls, args.threshold, wav)   # 非严格试听管线
+        if preview_hits:
+            preview_fp.append(f"{name}→{preview_hits[0]['label']}")
+    if preview_fp:
+        print("  [注意] 试听回放（非严格）管线只喂内置音频；直接喂这些负样本会误报："
+              + "、".join(preview_fp) + "（不计入失败）")
 
-    print("\n结论：" + ("全部通过 ✅" if ok_all and ok_neg else "有失败项 ❌（看上面标记）"))
+    ok = ok_all and ok_neg
+    print("\n结论：" + ("全部通过 ✅" if ok else "有失败项 ❌（看上面标记）"))
+    if not ok:
+        sys.exit(1)
 
 
 def cmd_record_ref(args):

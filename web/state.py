@@ -207,7 +207,7 @@ class StateBus:
         with self.lock:
             events = list(self.events)
 
-        hit = ignore = demo = 0
+        hit = ignore = preview = 0
         latency_total = 0
         latency_count = 0
         max_score = None
@@ -225,13 +225,13 @@ class StateBus:
                     by_class[cls] += 1
             else:
                 ignore += 1
-            if event.get("demo"):
-                demo += 1
+            if event.get("preview"):
+                preview += 1
 
         return {
             "hit": hit,
             "ignore": ignore,
-            "demo": demo,
+            "preview": preview,
             "avg_latency": (latency_total / latency_count) if latency_count else None,
             "max_score": max_score,
             "by_class": by_class,
@@ -445,7 +445,7 @@ class StateBus:
                 "命中" if event.get("type") == "hit" else "忽略",
                 event.get("label", ""),
                 event.get("tier", ""),
-                "是" if event.get("demo") else "否",
+                "是" if event.get("preview") else "否",
                 f"{float(event.get('score') or 0):.2f}",
                 f"{float(event.get('conf') or 0):.2f}",
                 int(event.get("latency") or 0),

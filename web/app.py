@@ -265,14 +265,14 @@ class App:
         while not self._ticker_stop.is_set():
             try:
                 self.bus.expire()
-                self._follow_demo_display()
+                self._follow_preview_display()
                 self._refresh_iot()
                 self.bus.broadcast_state()
             except Exception:  # noqa: BLE001
                 traceback.print_exc()
             self._ticker_stop.wait(0.125)
 
-    def _follow_demo_display(self) -> None:
+    def _follow_preview_display(self) -> None:
         """试听的大字跟随音频的真实有声区间，不在静音尾/间隙里硬撑。"""
         playing = self.bus.playing
         if not playing or playing.get("test"):
@@ -425,9 +425,11 @@ class App:
             self._stopping = False
 
     def _listen_loop(self, stop: threading.Event, threshold: float) -> None:
-        rec = None
         detector = None
+        rec = None
         suppressed = False
+        backoff = 2.0
+        retrying = False
         try:
             detector = R.Detector(
                 self.templates,
@@ -439,41 +441,75 @@ class App:
                 strict=True,
             )
             self._detector = detector
-            rec = R.Recorder(self._input_index())
-            rec.start()
-            self.log("麦克风已打开")
 
             while not stop.is_set():
-                block = rec.read_block(timeout=0.2)
-                if block is None:
-                    continue
-                if time.time() < self._suppress_until:
-                    if not suppressed:
-                        # 播放期间丢弃麦克风块；与桌面版一致，试听前清掉未完成的采集。
-                        detector.reset()
-                        suppressed = True
-                    self.bus.set_level(self._block_db(block), detector.floor)
-                    continue
-                if suppressed:
+                try:
+                    rec = R.Recorder(self._input_index())
+                    rec.start()
+                    self.log("麦克风已打开")
+                    if retrying:
+                        self.bus.set_notice(None)
+                        self.log("麦克风已恢复")
+                        retrying = False
+                    backoff = 2.0
+
+                    while not stop.is_set():
+                        block = rec.read_block(timeout=0.2)
+                        if block is None:
+                            continue
+                        if time.time() < self._suppress_until:
+                            if not suppressed:
+                                # 播放期间丢弃麦克风块；与桌面版一致，试听前清掉未完成的采集。
+                                detector.reset()
+                                suppressed = True
+                            self.bus.set_level(self._block_db(block), detector.floor)
+                            continue
+                        if suppressed:
+                            detector.reset()
+                            suppressed = False
+                        events = detector.process(block)
+                        level = detector.level
+                        gate = detector.floor + float(detector.gate_db)
+                        above = level > gate
+                        if above and self.bus.hit is not None:
+                            # 只在声音仍然存在时顺延；声音一停，约 0.4 秒后消失。
+                            # 不在这里重亮上一次命中：那会把“别的声响”显示成旧类别。
+                            self.bus.extend_hit(400, max_total_ms=12000)
+                        self.bus.set_level(detector.level, detector.floor)
+                        for event in events:
+                            self._handle_event(event, detector, preview=False)
+
+                except SystemExit as exc:
+                    message = f"打不开麦克风：{exc}"
+                except Exception as exc:  # noqa: BLE001
+                    traceback.print_exc()
+                    message = f"麦克风中断：{type(exc).__name__}: {exc}"
+                finally:
+                    if rec is not None:
+                        try:
+                            rec.stop()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        rec = None
                     detector.reset()
                     suppressed = False
-                events = detector.process(block)
-                level = detector.level
-                gate = detector.floor + float(detector.gate_db)
-                above = level > gate
-                if above and self.bus.hit is not None:
-                    # 只在声音仍然存在时顺延；声音一停，约 0.4 秒后消失。
-                    # 不在这里重亮上一次命中：那会把“别的声响”显示成旧类别。
-                    self.bus.extend_hit(400, max_total_ms=12000)
-                self.bus.set_level(detector.level, detector.floor)
-                for event in events:
-                    self._handle_event(event, detector, demo=False)
 
-        except SystemExit as exc:
-            self._fail_listen(f"打不开麦克风：{exc}")
-        except Exception as exc:  # noqa: BLE001
-            traceback.print_exc()
-            self._fail_listen(f"监听中断：{type(exc).__name__}: {exc}")
+                if stop.is_set():
+                    break
+
+                retrying = True
+                now = int(time.time() * 1000)
+                self.bus.set_notice({
+                    "kind": "error",
+                    "title": "麦克风断线，正在自动重试",
+                    "detail": f"{message}；约 {backoff:.0f} 秒后重试",
+                    "ts": now,
+                    "until": now + 24 * 3600 * 1000,
+                })
+                self.log(f"{message}；{backoff:.0f} 秒后自动重试")
+                stop.wait(backoff)
+                backoff = min(backoff * 1.5, 30.0)
+
         finally:
             if rec is not None:
                 try:
@@ -481,37 +517,27 @@ class App:
                 except Exception:  # noqa: BLE001
                     pass
             self._detector = None
+            if retrying:
+                self.bus.set_notice(None)
             with self._lock:
                 if self._listen_thread is threading.current_thread():
                     self._listen_thread = None
                 self._stopping = False
             self.log("监听线程已退出")
 
-    def _fail_listen(self, message: str) -> None:
-        self.log(message)
-        self.bus.set_listening(False)
-        title = "麦克风不可用" if "麦克风" in message else "监听中断"
-        self.bus.set_notice({
-            "kind": "error",
-            "title": title,
-            "detail": message,
-            "ts": int(time.time() * 1000),
-            "until": int(time.time() * 1000) + 24 * 3600 * 1000,
-        })
-
-    def _handle_event(self, event: dict, detector, demo: bool) -> None:
+    def _handle_event(self, event: dict, detector, preview: bool) -> None:
         kind = event.get("type")
         if kind == "trigger":
             self.bus.note_heard(0.6)
             return
         if kind in ("hit", "ignore"):
-            self._record_event(event, detector, demo=demo)
+            self._record_event(event, detector, preview=preview)
 
     # ------------------------------------------------------------------
     # 事件入库
     # ------------------------------------------------------------------
 
-    def _record_event(self, event: dict, detector, demo: bool) -> None:
+    def _record_event(self, event: dict, detector, preview: bool) -> None:
         wav = event.get("wav")
         score = float(event.get("score") or 0.0)
         conf = float(event.get("conf") or 0.0)
@@ -570,7 +596,7 @@ class App:
                     f"调制 {float(event.get('mod') or 0):.0%}）"
                 )
 
-        wav_file = self._save_recording(wav, entry_type, cls, score, conf, demo)
+        wav_file = self._save_recording(wav, entry_type, cls, score, conf, preview)
 
         normalized = {
             "type": entry_type,
@@ -598,7 +624,7 @@ class App:
             "threshold": round(float(self.config["threshold"]), 2),
             "tpl_scores": tpl_scores,
             "reason": reason,
-            "demo": bool(demo),
+            "preview": bool(preview),
             "wav_file": wav_file,
         }
 
@@ -611,24 +637,26 @@ class App:
                 "score": score,
                 "latency": float(event.get("latency") or 0.0),
                 "ts": public["ts"] / 1000.0,
-                "demo": bool(demo),
+                "preview": bool(preview),
             })
         except Exception:  # noqa: BLE001
             pass
 
-        prefix = "试听命中" if demo else ("命中" if entry_type == "hit" else "忽略")
+        prefix = "试听命中" if preview else ("命中" if entry_type == "hit" else "忽略")
         self.log(
             f"{prefix}：{label or '未知'}（{tier}）得分 {score:.2f} "
             f"延迟 {int(round(float(event.get('latency') or 0.0) * 1000))} ms"
         )
 
     def _save_recording(self, wav, entry_type: str, cls: str, score: float,
-                        conf: float, demo: bool) -> str | None:
+                        conf: float, preview: bool) -> str | None:
+        if not bool(self.config.get("record_enabled", True)):
+            return None
         if not isinstance(wav, np.ndarray) or not wav.size:
             return None
         try:
             stamp = time.strftime("%Y%m%d_%H%M%S")
-            suffix = "_demo" if demo else ""
+            suffix = "_preview" if preview else ""
             name = (
                 f"{stamp}_{entry_type}_{cls or 'none'}_s{score:.2f}_c{conf:.2f}"
                 f"{suffix}.wav"
@@ -946,7 +974,7 @@ class App:
             args=(path, float(R.PLAY_GAIN.get(cls, 1.0)), index),
             name="doorbell-play", daemon=True,
         ).start()
-        timer = threading.Timer(0.35, self._record_demo, args=(cls,))
+        timer = threading.Timer(0.35, self._record_preview, args=(cls,))
         timer.daemon = True
         timer.start()
         return {"ok": True}
@@ -966,7 +994,7 @@ class App:
             "active": active or [],
         })
 
-    def _record_demo(self, cls: str) -> None:
+    def _record_preview(self, cls: str) -> None:
         try:
             path = os.path.join(R.BUILTIN_AUDIO, f"{cls}.wav")
             if not os.path.exists(path):
@@ -1007,7 +1035,7 @@ class App:
                     "tier": R.EVENT_CLASSES[cls]["tier"],
                     "conf": 0.9,
                     "score": 0.9,
-                    "who": "demo",
+                    "who": "preview",
                     "dur": len(audio) / float(R.SR),
                     "latency": 0.35,
                     "tonal": 0.0,
@@ -1030,7 +1058,7 @@ class App:
             event["tier"] = info["tier"]
             # 试听是离线跑完整段音频，用固定值给页面一个可读的“延迟”。
             event["latency"] = 0.35
-            self._record_event(event, detector, demo=True)
+            self._record_event(event, detector, preview=True)
         except Exception as exc:  # noqa: BLE001
             traceback.print_exc()
             self.log(f"试听命中生成失败：{exc}")
@@ -1086,6 +1114,12 @@ class App:
             new_has = config_mod.password_set(new)
             if old_has != new_has or new.get("password_hash") != old.get("password_hash"):
                 self.log("访问口令已更新" if new_has else "访问口令已清除")
+
+            if bool(new.get("record_enabled", True)) != bool(old.get("record_enabled", True)):
+                self.log("判定录音保存已开启" if new.get("record_enabled", True)
+                         else "判定录音保存已关闭（已有录音不会被删除）")
+            if bool(new.get("privacy_ack", False)) and not bool(old.get("privacy_ack", False)):
+                self.log("隐私说明已确认")
 
             suffix = f"（{ '、'.join(live) } 已即时生效）" if live else ""
             self.log(f"设置已保存{suffix}")

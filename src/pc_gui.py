@@ -54,7 +54,7 @@ def _clip_db(db: float, lo: float = -70.0, hi: float = -10.0) -> float:
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("环境事件识别 · 控制台")
+        self.root.title("听障人士感知器 · 经典窗口")
         self.root.geometry("720x680")
         self.root.configure(bg=C_BG)
         self.root.minsize(680, 600)
@@ -78,7 +78,7 @@ class App:
         self._out_idx = None
         self._out_channels = None
         self._stopping = False
-        self._demo_q: queue.Queue = queue.Queue()
+        self._preview_q: queue.Queue = queue.Queue()
         self._advanced_open = False
         self.panel = None
         self.history: list[dict] = []
@@ -104,9 +104,9 @@ class App:
 
         header = tk.Frame(self.root, bg=C_BG)
         header.pack(fill="x", **pad)
-        tk.Label(header, text="环境事件识别", bg=C_BG, fg=C_TEXT,
+        tk.Label(header, text="听障人士感知器", bg=C_BG, fg=C_TEXT,
                  font=(FONT, 16, "bold")).pack(side="left")
-        tk.Label(header, text="听障人士环境事件感知 · Demo", bg=C_BG, fg=C_SUB,
+        tk.Label(header, text="经典桌面窗口（回退）", bg=C_BG, fg=C_SUB,
                  font=(FONT, 9)).pack(side="left", padx=10, pady=4)
         self.btn_panel = tk.Button(header, text="📊 数据面板", command=self._open_panel,
                                    bg="#e6ebf0", fg=C_TEXT, relief="flat",
@@ -161,15 +161,15 @@ class App:
         self.btn_toggle.pack(side="left", fill="x", expand=True)
 
         # ---- 试听（四类事件） ----
-        demo = tk.Frame(self.root, bg=C_BG)
-        demo.pack(fill="x", padx=14, pady=(0, 6))
-        tk.Label(demo, text="试听：", bg=C_BG, fg=C_SUB, font=(FONT, 9)).pack(side="left")
+        preview = tk.Frame(self.root, bg=C_BG)
+        preview.pack(fill="x", padx=14, pady=(0, 6))
+        tk.Label(preview, text="试听：", bg=C_BG, fg=C_SUB, font=(FONT, 9)).pack(side="left")
         for cls in ("doorbell", "knock", "kettle", "fire"):
             info = R.EVENT_CLASSES[cls]
-            tk.Button(demo, text=f"▶ {info['label']}", relief="flat", bg="#f0e9dd", fg=C_TEXT,
+            tk.Button(preview, text=f"▶ {info['label']}", relief="flat", bg="#f0e9dd", fg=C_TEXT,
                       font=(FONT, 9),
                       command=lambda c=cls: self._play_class(c)).pack(side="left", padx=3)
-        tk.Button(demo, text="🔊 测试音", command=self._play_test_tone, relief="flat",
+        tk.Button(preview, text="🔊 测试音", command=self._play_test_tone, relief="flat",
                   bg="#e6ebf0", fg=C_TEXT, font=(FONT, 9)).pack(side="left", padx=(12, 3))
 
         # ---- 高级设置（可折叠） ----
@@ -441,7 +441,7 @@ class App:
         self.stop_evt.set()
         while True:
             try:
-                self._demo_q.get_nowait()
+                self._preview_q.get_nowait()
             except queue.Empty:
                 break
         w = self.worker
@@ -468,17 +468,17 @@ class App:
         self.lbl_db.configure(text="-- dB")
         self._log("停止监听")
 
-    def _run_demo(self, det, demo):
+    def _run_preview(self, det, preview):
         """试听回放：把内置音频按实时节奏送进检测器（不经麦克风，保证试听可见）。"""
-        cls, x = demo
+        cls, x = preview
         det.reset()
         det.strict = False          # 试听回放用干净音频，走非严格管线
         try:
-            self._feed_demo(det, x)
+            self._feed_preview(det, x)
         finally:
             det.strict = True
 
-    def _feed_demo(self, det, x):
+    def _feed_preview(self, det, x):
         block = int(R.SR * R.BLOCK_SEC)
         y = np.concatenate([
             np.zeros(int(0.30 * R.SR), dtype=np.float32),
@@ -493,7 +493,7 @@ class App:
             self._post("level", db=det.level, floor=det.floor)   # 让音量条跟着声音走
             for ev in events:
                 if ev["type"] == "hit":
-                    ev["demo"] = True
+                    ev["preview"] = True
                     got = True
                 if ev["type"] in ("hit", "ignore"):
                     self._post("event", ev=ev)
@@ -511,11 +511,11 @@ class App:
             self._post("state", text="监听中", color=C_LISTEN)
             while not self.stop_evt.is_set():
                 try:
-                    demo = self._demo_q.get_nowait()
+                    preview = self._preview_q.get_nowait()
                 except queue.Empty:
-                    demo = None
-                if demo is not None:
-                    self._run_demo(det, demo)
+                    preview = None
+                if preview is not None:
+                    self._run_preview(det, preview)
                     continue
                 block = rec.read_block(timeout=0.3)
                 if block is None:
@@ -606,7 +606,7 @@ class App:
             "cls": ev.get("cls", ""),
             "label": ev.get("label", ""),
             "tier": ev.get("tier", ""),
-            "demo": bool(ev.get("demo")),
+            "preview": bool(ev.get("preview")),
             "score": float(ev["score"]),
             "latency_ms": float(ev["latency"]) * 1000,
             "dur": float(ev["dur"]),
@@ -639,7 +639,7 @@ class App:
             self.lbl_detail.configure(
                 text=f"{tier}　得分 {ev['score']:.2f}　延迟 {ev['latency']*1000:.0f} ms　"
                      f"{self.last_hit_at}")
-            self._log(f"{'试听命中' if ev.get('demo') else '命中'} {label}（{tier}） "
+            self._log(f"{'试听命中' if ev.get('preview') else '命中'} {label}（{tier}） "
                       f"conf={ev.get('conf', 0):.2f} "
                       f"score={ev['score']:.3f}  "
                       f"敲击={ev.get('n_knock', 0)} 脉冲={ev.get('n_pulse', 0)} "
@@ -802,10 +802,10 @@ class App:
                         # 只保留最新一次试听，避免快速连点造成排队延迟
                         while True:
                             try:
-                                self._demo_q.get_nowait()
+                                self._preview_q.get_nowait()
                             except queue.Empty:
                                 break
-                        self._demo_q.put((cls, R.to_16k(x, sr)))
+                        self._preview_q.put((cls, R.to_16k(x, sr)))
                     except Exception as e:  # noqa: BLE001
                         self._post("log", text=f"试听音频加载失败：{e}")
                 # 播放原始录音（不调音量/不变音色）

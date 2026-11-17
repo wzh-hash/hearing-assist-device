@@ -1,5 +1,5 @@
 /* ==========================================================================
-   环境事件识别台 · 客户端
+   听障人士感知器 · 客户端
    - 取数只有一个入口：bus.request / bus.start（Electron 壳里替换 window.__DOORBELL__ 即可）
    - ?mock=1 时改用 mock.js 的本地状态机，脱离 Python 也能完整走界面
    ========================================================================== */
@@ -12,7 +12,7 @@
 
   const IS_MOCK = new URLSearchParams(location.search).has('mock');
   const API_BASE = (window.__DOORBELL__ && window.__DOORBELL__.apiBase) || '';
-  const BASE_TITLE = IS_MOCK ? '模拟数据 · 环境事件识别台' : '环境事件识别台';
+  const BASE_TITLE = IS_MOCK ? '模拟数据 · 听障人士感知器' : '听障人士感知器';
 
   const MODE_LABEL = { idle: '未就绪', listening: '监听中', learning: '学习中', hit: '命中' };
   const IOT_LABEL = {
@@ -34,7 +34,8 @@
     viewData: null,
     lastFocus: null,
     closeTimer: 0,
-    toastTimer: 0
+    toastTimer: 0,
+    privacyShown: false
   };
 
   const el = {};
@@ -249,7 +250,7 @@
     el.hitScore = $('#hit-score');
     el.hitLatency = $('#hit-latency');
     el.hitTime = $('#hit-time');
-    el.hitDemo = $('#hit-demo');
+    el.hitPreview = $('#hit-preview');
     el.learn = $('#learn');
     el.learnSegments = $('#learn-segments');
     el.learnBar = $('#learn-bar');
@@ -276,6 +277,8 @@
     el.gateForm = $('#gate-form');
     el.gatePassword = $('#gate-password');
     el.gateError = $('#gate-error');
+    el.privacy = $('#privacy');
+    el.privacyOk = $('#privacy-ok');
   }
 
   function boot() {
@@ -381,6 +384,7 @@
     renderGauge(snapshot);
     renderHero(snapshot);
     renderFoot(snapshot);
+    maybeShowPrivacy(snapshot);
 
     if (S.view) updateDrawerLive(snapshot);
   }
@@ -587,7 +591,7 @@
       setText(el.hitScore, num(hit.score, 2, '0.00'));
       setText(el.hitLatency, String(Math.round(Number(hit.latency) || 0)));
       setText(el.hitTime, fmtClock(hit.ts));
-      el.hitDemo.hidden = !hit.demo;
+      el.hitPreview.hidden = !hit.preview;
     }
 
     // 学习态
@@ -656,7 +660,7 @@
         '<span class="row__cls">' + esc(event.label) + '</span>' +
         '<span class="row__tags">' +
           '<span class="' + tierClass(event.tier, !hit) + '">' + esc(event.tier) + '</span>' +
-          (event.demo ? '<span class="tag-demo">演示</span>' : '') +
+          (event.preview ? '<span class="tag-preview">试听</span>' : '') +
         '</span>' +
       '</span>' +
       '<span class="row__meta">' +
@@ -857,6 +861,16 @@
         '</label>' +
       '</section>' +
       '<section class="section">' +
+        '<h3 class="section__title">录音与隐私</h3>' +
+        '<label class="switch">' +
+          '<span class="switch__text">保存判定录音（本机，最多 300 条）</span>' +
+          '<input type="checkbox" id="set-record" ' + (config.record_enabled !== false ? 'checked' : '') + '>' +
+          '<span class="switch__track"></span>' +
+        '</label>' +
+        '<p class="field__hint">录音只保存在这台电脑，不会上传；关闭后不再写入新录音，已有录音可在「记录」里清空。</p>' +
+        '<button class="btn btn--ghost btn--sm" id="show-privacy" type="button">查看隐私说明</button>' +
+      '</section>' +
+      '<section class="section">' +
         '<h3 class="section__title">模板</h3>' +
         '<p class="field__hint">当前 ' + (templates.count || 0) + ' 个模板' +
           (templates.skipped ? '，跳过 ' + templates.skipped + ' 个不像门铃的参考音' : '') + '。</p>' +
@@ -910,6 +924,12 @@
     });
     const lan = $('#set-lan');
     if (lan) lan.addEventListener('change', markDirty);
+
+    const record = $('#set-record');
+    if (record) record.addEventListener('change', markDirty);
+
+    const showPrivacyButton = $('#show-privacy');
+    if (showPrivacyButton) showPrivacyButton.addEventListener('click', showPrivacy);
 
     $('#save-settings').addEventListener('click', saveSettings);
 
@@ -981,7 +1001,8 @@
       takes: Number($('#set-takes').value),
       mic_index: Number($('#set-mic').value),
       speaker_index: Number($('#set-speaker').value),
-      lan: $('#set-lan').checked
+      lan: $('#set-lan').checked,
+      record_enabled: $('#set-record').checked
     };
     const password = $('#set-password');
     if (password && password.value) payload.password = password.value;
@@ -1096,7 +1117,7 @@
         '<div class="stats">' +
           '<div class="stat"><b id="stat-hit">' + (stats.hit || 0) + '</b><span>命中</span></div>' +
           '<div class="stat"><b id="stat-ignore">' + (stats.ignore || 0) + '</b><span>忽略</span></div>' +
-          '<div class="stat"><b id="stat-demo">' + (stats.demo || 0) + '</b><span>演示命中</span></div>' +
+          '<div class="stat"><b id="stat-preview">' + (stats.preview || 0) + '</b><span>试听命中</span></div>' +
         '</div>' +
         '<dl class="kv" style="margin-top:14px">' +
           '<dt>平均延迟</dt><dd id="stat-latency">' + (stats.avg_latency == null ? '—' : Math.round(stats.avg_latency) + ' ms') + '</dd>' +
@@ -1206,11 +1227,11 @@
       return;
     }
 
-    const header = ['时间', '类型', '类别', 'tier', '是否演示', '得分', '置信度', '延迟ms', '时长s', '调性', '调制', '衰减', '稳定度', '主频比'];
+    const header = ['时间', '类型', '类别', 'tier', '是否试听', '得分', '置信度', '延迟ms', '时长s', '调性', '调制', '衰减', '稳定度', '主频比'];
     const rows = S.events.slice().reverse().map(function (e) {
       return [
         fmtFull(e.ts), e.type === 'hit' ? '命中' : '忽略', e.label || '', e.tier || '',
-        e.demo ? '是' : '否', num(e.score, 2, ''), num(e.conf, 2, ''),
+        e.preview ? '是' : '否', num(e.score, 2, ''), num(e.conf, 2, ''),
         Math.round(Number(e.latency) || 0), num(e.dur, 2, ''),
         num(e.tonal, 2, ''), num(e.mod, 2, ''), num(e.decay, 2, ''),
         num(e.stab, 2, ''), num(e.freq_ratio, 2, '')
@@ -1260,7 +1281,7 @@
       '<div class="detail__head">' +
         '<span class="detail__cls">' + esc(event.label) + '</span>' +
         '<span class="' + tierClass(tier, !hit) + '">' + tier + '</span>' +
-        (event.demo ? '<span class="tag-demo">演示</span>' : '') +
+        (event.preview ? '<span class="tag-preview">试听</span>' : '') +
         '<span class="detail__time">' + fmtFull(event.ts) + '</span>' +
       '</div>' +
       (event.reason ? '<p class="detail__reason">' + esc(event.reason) + '</p>' : '') +
@@ -1274,7 +1295,7 @@
           '<dt>置信度</dt><dd>' + num(event.conf, 2) + '</dd>' +
           '<dt>延迟</dt><dd>' + Math.round(Number(event.latency) || 0) + ' ms</dd>' +
           '<dt>时长</dt><dd>' + num(event.dur, 2) + ' s</dd>' +
-          '<dt>演示</dt><dd>' + (event.demo ? '是' : '否') + '</dd>' +
+          '<dt>试听</dt><dd>' + (event.preview ? '是' : '否') + '</dd>' +
         '</dl>' +
       '</section>' +
       '<section class="section">' +
@@ -1534,7 +1555,7 @@
       const byClass = stats.by_class || {};
       setText($('#stat-hit'), String(stats.hit || 0));
       setText($('#stat-ignore'), String(stats.ignore || 0));
-      setText($('#stat-demo'), String(stats.demo || 0));
+      setText($('#stat-preview'), String(stats.preview || 0));
       setText($('#stat-latency'), stats.avg_latency == null ? '—' : Math.round(stats.avg_latency) + ' ms');
       setText($('#stat-score'), stats.max_score == null ? '—' : num(stats.max_score, 2));
       Object.keys(byClass).forEach(function (key) {
@@ -1692,6 +1713,34 @@
   }
 
   /* ------------------------------------------------------------------------
+     首次隐私说明
+     ------------------------------------------------------------------------ */
+
+  function maybeShowPrivacy(snapshot) {
+    if (IS_MOCK || S.privacyShown) return;
+    S.privacyShown = true;
+    const config = snapshot.config || {};
+    if (config.privacy_ack) return;
+    showPrivacy();
+  }
+
+  function showPrivacy() {
+    if (!el.privacy) return;
+    el.privacy.hidden = false;
+    if (el.app) el.app.inert = true;
+    window.setTimeout(function () { el.privacyOk.focus(); }, 30);
+  }
+
+  function ackPrivacy() {
+    post('/api/settings', { privacy_ack: true }).then(function () {
+      el.privacy.hidden = true;
+      if (el.app) el.app.inert = false;
+      if (S.snap && S.snap.config) S.snap.config.privacy_ack = true;
+      toast('已记录，可在「设置」里调整录音开关');
+    }).catch(function () {});
+  }
+
+  /* ------------------------------------------------------------------------
      事件绑定
      ------------------------------------------------------------------------ */
 
@@ -1703,6 +1752,7 @@
     el.drawerClose.addEventListener('click', closeDrawer);
     el.scrim.addEventListener('click', closeDrawer);
     el.gateForm.addEventListener('submit', submitGate);
+    el.privacyOk.addEventListener('click', ackPrivacy);
     el.railMore.addEventListener('click', loadOlder);
 
     document.addEventListener('click', function (event) {

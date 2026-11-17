@@ -205,8 +205,8 @@ class Hub:
             ("knock", False, 78 * 60 * 1000, False),
             ("doorbell", False, 91 * 60 * 1000, True),
         ]
-        for cls, demo, ago, ignore in seeds:
-            event = self._make_event(cls, demo=demo, ago_ms=ago, ignore=ignore)
+        for cls, preview, ago, ignore in seeds:
+            event = self._make_event(cls, preview=preview, ago_ms=ago, ignore=ignore)
             self._attach_recording(event)
             self._store_event(event)
 
@@ -214,7 +214,7 @@ class Hub:
 
     # -- 事件 ---------------------------------------------------------------
 
-    def _make_event(self, cls: str, demo: bool = False, ago_ms: float = 0.0,
+    def _make_event(self, cls: str, preview: bool = False, ago_ms: float = 0.0,
                     ignore: bool = False) -> dict:
         info = CLASSES.get(cls, CLASSES["doorbell"])
         ts = now_ms() - ago_ms
@@ -233,7 +233,7 @@ class Hub:
             "conf": round(min(0.99, max(0.2, score + random.uniform(-0.08, 0.08))), 2),
             "latency": random.randint(320, 760),
             "dur": round(random.uniform(0.45, 1.6), 2),
-            "demo": bool(demo),
+            "preview": bool(preview),
             "tonal": round(random.uniform(0.20, 0.85), 2),
             "mod": round(random.uniform(0.10, 0.80), 2),
             "decay": round(random.uniform(0.10, 0.70), 2),
@@ -304,7 +304,7 @@ class Hub:
     # -- 快照 ---------------------------------------------------------------
 
     def stats_locked(self) -> dict:
-        hit = ignore = demo = 0
+        hit = ignore = preview = 0
         latency_total = 0
         latency_count = 0
         max_score = None
@@ -320,13 +320,13 @@ class Hub:
                 by_class[event["cls"]] = by_class.get(event["cls"], 0) + 1
             else:
                 ignore += 1
-            if event.get("demo"):
-                demo += 1
+            if event.get("preview"):
+                preview += 1
 
         return {
             "hit": hit,
             "ignore": ignore,
-            "demo": demo,
+            "preview": preview,
             "avg_latency": (latency_total / latency_count) if latency_count else None,
             "max_score": max_score,
             "by_class": by_class,
@@ -397,11 +397,11 @@ class Hub:
 
     # -- 模拟 ---------------------------------------------------------------
 
-    def fire_hit(self, cls: str, demo: bool = False) -> None:
+    def fire_hit(self, cls: str, preview: bool = False) -> None:
         with self.lock:
             if self.mode == "learning":
                 return
-            event = self._make_event(cls, demo=demo)
+            event = self._make_event(cls, preview=preview)
             if self.mode in ("listening", "idle"):
                 self.before_hit = self.mode
             self.mode = "hit"
@@ -414,7 +414,7 @@ class Hub:
             self.cooldown_until = now_ms() + COOLDOWN_MS
             self._push_event(event)
 
-            prefix = "试听命中" if demo else "命中"
+            prefix = "试听命中" if preview else "命中"
             self.log(f"{prefix}：{event['label']}，得分 {event['score']:.2f}")
 
     def start_learning(self, takes) -> None:
@@ -522,7 +522,7 @@ class Hub:
         if self.pending_hit_at and ts >= self.pending_hit_at:
             roll = random.random()
             cls = "doorbell" if roll < 0.55 else "knock" if roll < 0.78 else "kettle" if roll < 0.92 else "fire"
-            self.fire_hit(cls, demo=False)
+            self.fire_hit(cls, preview=False)
 
     def tick(self) -> None:
         ts = now_ms()
@@ -1147,7 +1147,7 @@ class Handler(BaseHTTPRequestHandler):
                 "命中" if event["type"] == "hit" else "忽略",
                 event["label"],
                 event["tier"],
-                "是" if event.get("demo") else "否",
+                "是" if event.get("preview") else "否",
                 f"{event['score']:.2f}",
                 f"{event['conf']:.2f}",
                 event["latency"],

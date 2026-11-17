@@ -32,7 +32,7 @@ SHORT_DEBOUNCE_MS = 300
 def parse_event(data):
     """解析结构化载荷；不是事件（含心跳）返回 None。
 
-    宽容策略：`tier` 缺失按 L2、`demo` 缺失按 False、`ts` 非数字按 None，
+    宽容策略：`tier` 缺失按 L2、`preview` 缺失按 False、`ts` 非数字按 None，
     这样上位机将来加字段也不会把板子打挂。`data` 允许 bytes 或 str——
     K10 的 `message()` 返回什么类型官方没写死，两种都得认。
     """
@@ -78,7 +78,7 @@ def _from_obj(obj):
     return {
         "cls": cls,
         "tier": tier,
-        "demo": bool(obj.get("demo", False)),
+        "preview": bool(obj.get("preview", False)),
         "ts": ts,
         "score": score,
         "latency": latency,
@@ -100,7 +100,7 @@ def parse_short(data):
     cls = SHORT_TO_CLASS.get(text.strip().upper())
     if cls is None:
         return None
-    return {"cls": cls, "tier": "L2", "demo": False, "ts": None,
+    return {"cls": cls, "tier": "L2", "preview": False, "ts": None,
             "score": None, "latency": None, "short": True}
 
 

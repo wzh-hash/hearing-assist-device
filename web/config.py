@@ -26,6 +26,8 @@ DEFAULT_GATE_DB = 8
 DEFAULT_TAKES = 3
 DEFAULT_MIC_INDEX = -1       # -1 = 跟随系统
 DEFAULT_SPEAKER_INDEX = -1
+DEFAULT_RECORD_ENABLED = True   # 判定录音默认保存（首次启动有隐私说明）
+DEFAULT_PRIVACY_ACK = False     # 是否已确认首次隐私说明
 
 
 def _as_bool(value, default: bool) -> bool:
@@ -75,6 +77,8 @@ def load() -> dict:
         "speaker_index": _as_int(raw.get("speaker_index"), DEFAULT_SPEAKER_INDEX),
         "takes": takes,
         "lan": _as_bool(raw.get("lan"), True),
+        "record_enabled": _as_bool(raw.get("record_enabled"), DEFAULT_RECORD_ENABLED),
+        "privacy_ack": _as_bool(raw.get("privacy_ack"), DEFAULT_PRIVACY_ACK),
         "password_hash": _as_text(raw.get("password_hash")),
         "password_salt": _as_text(raw.get("password_salt")),
         "password_iterations": _as_int(
@@ -95,6 +99,8 @@ def public(cfg: dict) -> dict:
         "speaker_index": int(cfg.get("speaker_index", DEFAULT_SPEAKER_INDEX)),
         "takes": int(cfg.get("takes", DEFAULT_TAKES)),
         "lan": bool(cfg.get("lan", True)),
+        "record_enabled": bool(cfg.get("record_enabled", DEFAULT_RECORD_ENABLED)),
+        "privacy_ack": bool(cfg.get("privacy_ack", DEFAULT_PRIVACY_ACK)),
         "password_set": password_set(cfg),
     }
 
@@ -119,6 +125,8 @@ def save(cfg: dict) -> None:
         "speaker_index": int(cfg.get("speaker_index", DEFAULT_SPEAKER_INDEX)),
         "takes": int(cfg.get("takes", DEFAULT_TAKES)),
         "lan": bool(cfg.get("lan", True)),
+        "record_enabled": bool(cfg.get("record_enabled", DEFAULT_RECORD_ENABLED)),
+        "privacy_ack": bool(cfg.get("privacy_ack", DEFAULT_PRIVACY_ACK)),
         "password_hash": _as_text(cfg.get("password_hash")),
         "password_salt": _as_text(cfg.get("password_salt")),
         "password_iterations": int(cfg.get("password_iterations", PBKDF2_ITERATIONS)),
@@ -231,6 +239,12 @@ def apply_patch(current: dict, patch: dict) -> dict:
 
     if "lan" in patch:
         cfg["lan"] = _as_bool(patch["lan"], True)
+
+    if "record_enabled" in patch:
+        cfg["record_enabled"] = _as_bool(patch["record_enabled"], DEFAULT_RECORD_ENABLED)
+
+    if "privacy_ack" in patch:
+        cfg["privacy_ack"] = _as_bool(patch["privacy_ack"], DEFAULT_PRIVACY_ACK)
 
     if patch.get("clear_password"):
         clear_password(cfg)

@@ -48,7 +48,7 @@ def short_code(cls: str) -> str:
         raise PayloadError(f"未知类别：{cls}") from None
 
 
-def _check_event(cls: str, tier: str, score: float, latency: float, ts: float, demo: bool) -> None:
+def _check_event(cls: str, tier: str, score: float, latency: float, ts: float, preview: bool) -> None:
     if cls not in CLASSES:
         raise PayloadError(f"未知类别：{cls}")
     if tier not in TIERS:
@@ -64,8 +64,8 @@ def _check_event(cls: str, tier: str, score: float, latency: float, ts: float, d
         raise PayloadError("延迟不能为负")
     if float(ts) <= 0:
         raise PayloadError("时间戳必须大于 0")
-    if not isinstance(demo, bool):
-        raise PayloadError("演示标记必须是布尔值")
+    if not isinstance(preview, bool):
+        raise PayloadError("试听标记必须是布尔值")
 
 
 def event_dict(
@@ -75,10 +75,10 @@ def event_dict(
     score: float,
     latency: float,
     ts: float,
-    demo: bool = False,
+    preview: bool = False,
 ) -> dict:
     """构造结构化载荷（字段固定，多一个少一个都不行，IOT-3.4）。"""
-    _check_event(cls, tier, score, latency, ts, demo)
+    _check_event(cls, tier, score, latency, ts, preview)
     return {
         "v": VERSION,
         "cls": cls,
@@ -86,7 +86,7 @@ def event_dict(
         "score": round(float(score), 3),
         "latency": round(float(latency), 3),
         "ts": round(float(ts), 3),
-        "demo": bool(demo),
+        "preview": bool(preview),
     }
 
 
@@ -102,7 +102,7 @@ def encode_event(
     score: float,
     latency: float,
     ts: float,
-    demo: bool = False,
+    preview: bool = False,
     fmt: str = "json",
 ) -> bytes:
     """按指定形式编码一条事件；两种形式语义相同（IOT-3.3）。"""
@@ -110,7 +110,7 @@ def encode_event(
         return short_code(cls).encode("ascii")
     if fmt not in FORMATS:
         raise PayloadError(f"未知载荷形式：{fmt}")
-    data = dumps(event_dict(cls=cls, tier=tier, score=score, latency=latency, ts=ts, demo=demo))
+    data = dumps(event_dict(cls=cls, tier=tier, score=score, latency=latency, ts=ts, preview=preview))
     if len(data) > MAX_BYTES:
         raise PayloadError(f"载荷超过 {MAX_BYTES} 字节")
     return data

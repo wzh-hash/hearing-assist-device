@@ -1,4 +1,4 @@
-# ???? _install_deps.py ???
+# 依赖目录（必须随项目一起拷贝，不进版本库）
 lib/
 
 # ?????
@@ -15,6 +15,7 @@ sounds/iot.json
 board/config.py
 sounds/session_log.csv
 sounds/events/
+sounds/logs/
 sounds/builtin_raw/
 sounds/live_diag/
 sounds/test_live/

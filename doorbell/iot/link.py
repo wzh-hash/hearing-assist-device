@@ -367,7 +367,7 @@ class IotLink:
             score=float(event.get("score") or 0.0),
             latency=float(event.get("latency") or 0.0),
             ts=float(event.get("ts") or self._wall()),
-            demo=bool(event.get("demo", False)),
+            preview=bool(event.get("preview", False)),
             fmt=self._settings.format,
         )
 

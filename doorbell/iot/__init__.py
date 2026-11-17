@@ -11,7 +11,7 @@
     link.on_change(lambda snap: push_to_page(snap.as_dict()))
     link.start()
     link.publish({"type": "hit", "cls": "doorbell", "tier": "L2",
-                  "score": 0.8, "latency": 0.42, "ts": time.time(), "demo": False})
+                  "score": 0.8, "latency": 0.42, "ts": time.time(), "preview": False})
 """
 
 from .errors import ConfigError, IotError, NotConfigured, explain

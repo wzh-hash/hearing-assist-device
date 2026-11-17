@@ -285,11 +285,11 @@ web\static\index.html?mock=1
 | `playing` | `{cls, label, test, until}` 或 null |
 | `notice` | 短暂态：`{title, detail, ts, until}`；学习成功 6s、失败 8s、麦克风错误 24h |
 | `iot` / `board` | `{state,last_ok,last_error,sent,dropped,config}`、`{online}` |
-| `stats` | `{hit,ignore,demo,avg_latency,max_score,by_class}` |
+| `stats` | `{hit,ignore,preview,avg_latency,max_score,by_class}` |
 | `config` | 阈值、门控、设备序号、学习次数、局域网、`password_set` |
 | `devices` / `net` | 设备列表；`{local, lan, port, lan_enabled}` |
 | `events_total` / `rec_count` | 事件总数（用于「载入更早」）与录音数 |
-| `events[]`（单条事件） | `type/cls/label/tier/score/conf/latency(ms)/dur/demo/reason/wav/trace/trace_points/threshold/tpl_scores/peak_db/snr` |
+| `events[]`（单条事件） | `type/cls/label/tier/score/conf/latency(ms)/dur/preview/reason/wav/trace/trace_points/threshold/tpl_scores/peak_db/snr` |
 | `now` / `mock` | 服务端毫秒时间；真实服务为 false |
 
 ### 11.2 接口
@@ -303,7 +303,7 @@ web\static\index.html?mock=1
 | GET | `/events` | SSE：`state` 8 Hz、`event`、`log`、`heartbeat` 1 Hz，`retry: 3000` |
 | POST | `/api/listen` | `{on:bool}` 幂等 |
 | POST | `/api/learn` | `{action:"start"\|"cancel", takes}`；冲突 409 + 中文原因 |
-| POST | `/api/preview` | `{cls}` / `{test:true}` / `{file}`；试听命中带 `demo` |
+| POST | `/api/preview` | `{cls}` / `{test:true}` / `{file}`；试听命中带 `preview` |
 | POST | `/api/settings` | 阈值/门控/设备/学习次数/局域网/口令；`clear_password` |
 | POST | `/api/templates/refresh` | 重新扫描模板 |
 | POST | `/api/iot/config`、`/api/iot/test` | 上报配置与测试（映射到 `doorbell.iot.IotSettings`） |

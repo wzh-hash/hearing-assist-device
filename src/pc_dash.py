@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-数据面板（给老师 / 评委看的数据与可视化）
+数据面板（给使用者与照护者看的数据与可视化）
 
 内容：
     - 会话统计：模板数、阈值、命中/忽略次数、平均延迟、最高得分
@@ -65,7 +65,7 @@ class DataPanel(tk.Toplevel):
     def _build(self):
         pad = dict(padx=12, pady=6)
 
-        tk.Label(self, text="数据面板 · 门铃识别", bg=BG, fg=TEXT,
+        tk.Label(self, text="数据面板 · 听障人士感知器", bg=BG, fg=TEXT,
                  font=("Microsoft YaHei UI", 14, "bold")).pack(anchor="w", **pad)
 
         # 统计条

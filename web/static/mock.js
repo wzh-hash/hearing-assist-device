@@ -1,6 +1,6 @@
 /* ==========================================================================
-   环境事件识别台 · 本地模拟总线（?mock=1）
-   只用于脱离 Python 的界面开发与演示兜底；页面必须显式标注「模拟数据」。
+   听障人士感知器 · 本地模拟总线（?mock=1）
+   只用于脱离 Python 的界面联调；页面必须显式标注「模拟数据」。
    ========================================================================== */
 
 'use strict';
@@ -102,7 +102,7 @@
        种子数据
        --------------------------------------------------------------------- */
 
-    function makeEvent(cls, demo, agoMs, ignore) {
+    function makeEvent(cls, preview, agoMs, ignore) {
       const info = CLASSES[cls] || CLASSES.doorbell;
       const ts = now() - agoMs;
       const score = ignore ? rand(0.36, 0.54) : rand(0.68, 0.94);
@@ -120,7 +120,7 @@
         conf: Math.min(0.99, Math.max(0.2, score + rand(-0.08, 0.08))),
         latency: Math.round(rand(320, 760)),
         dur: Number(rand(0.45, 1.6).toFixed(2)),
-        demo: !!demo,
+        preview: !!preview,
         tonal: Number(rand(0.2, 0.85).toFixed(2)),
         mod: Number(rand(0.1, 0.8).toFixed(2)),
         decay: Number(rand(0.1, 0.7).toFixed(2)),
@@ -174,7 +174,7 @@
     function stats() {
       let hit = 0;
       let ignore = 0;
-      let demo = 0;
+      let preview = 0;
       let latency = 0;
       let latencyCount = 0;
       let maxScore = null;
@@ -190,13 +190,13 @@
         } else {
           ignore += 1;
         }
-        if (event.demo) demo += 1;
+        if (event.preview) preview += 1;
       });
 
       return {
         hit: hit,
         ignore: ignore,
-        demo: demo,
+        preview: preview,
         avg_latency: latencyCount ? latency / latencyCount : null,
         max_score: maxScore,
         by_class: byClass
@@ -298,8 +298,8 @@
       if (hub.onMessage) hub.onMessage(message);
     }
 
-    function fireHit(cls, demo) {
-      const event = makeEvent(cls, demo, 0, false);
+    function fireHit(cls, preview) {
+      const event = makeEvent(cls, preview, 0, false);
       event.wav = null;
 
       hub.before_hit = hub.mode === 'learning' ? 'idle' : hub.mode === 'hit' ? hub.before_hit : hub.mode;
@@ -311,7 +311,7 @@
       hub.cooldown = now() + 8000;
 
       pushEvent(event);
-      log((demo ? '演示命中：' : '命中') + event.label + '，得分 ' + event.score.toFixed(2));
+      log((preview ? '试听命中：' : '命中') + event.label + '，得分 ' + event.score.toFixed(2));
     }
 
     function startLearn(takes) {

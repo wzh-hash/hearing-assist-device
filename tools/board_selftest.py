@@ -163,10 +163,10 @@ def test_protocol_contract() -> None:
     check("等级一致", board_protocol.TIERS == pc_payload.TIERS)
 
     encoded = pc_payload.encode_event(
-        cls="kettle", tier="L3", score=0.74, latency=0.41, ts=1763265600.123, demo=True
+        cls="kettle", tier="L3", score=0.74, latency=0.41, ts=1763265600.123, preview=True
     )
     event = board_protocol.decode(encoded)
-    check("上位机 JSON → 板子", event is not None and event["cls"] == "kettle" and event["demo"] is True, event)
+    check("上位机 JSON → 板子", event is not None and event["cls"] == "kettle" and event["preview"] is True, event)
     check("ts 保真", abs(event["ts"] - 1763265600.123) < 0.001)
     check("tier 保真", event["tier"] == "L3")
     check("score 透传", abs(event["score"] - 0.74) < 0.001, event)
@@ -200,7 +200,7 @@ def test_dedup() -> None:
     link = make_link(factory, ui, clock)
     link.open()
 
-    event = {"cls": "doorbell", "tier": "L2", "demo": False, "ts": 1000.0, "short": False}
+    event = {"cls": "doorbell", "tier": "L2", "preview": False, "ts": 1000.0, "short": False}
 
     link.inject(json.dumps(_payload("doorbell", ts=1000.0)).encode())
     clock.now += 100
@@ -238,7 +238,7 @@ def _payload(cls, ts):
         "score": 0.8,
         "latency": 0.4,
         "ts": ts,
-        "demo": False,
+        "preview": False,
     }
 
 
